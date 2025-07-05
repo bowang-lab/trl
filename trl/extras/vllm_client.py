@@ -238,9 +238,11 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: List[str],
-        dna_sequences: Optional[List[List[str]]] = None,
-        protein_sequences: Optional[List[List[str]]] = None,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        dna_tokenized: dict[str, torch.Tensor] = None,
+        batch_idx_map: list[int] = None,
+        # TODO: protein_sequences: Optional[List[List[str]]] = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -290,21 +292,14 @@ class VLLMClient:
             ValueError: If both dna_sequences and protein_sequences are provided, or if sequence lengths don't match prompts.
             Exception: If the server request fails.
         """
-        # Validate inputs
-        if dna_sequences is not None and protein_sequences is not None:
-            raise ValueError("Cannot provide both dna_sequences and protein_sequences")
-        
-        if dna_sequences is not None and len(dna_sequences) != len(prompts):
-            raise ValueError(f"Length of dna_sequences ({len(dna_sequences)}) must match length of prompts ({len(prompts)})")
-        
-        if protein_sequences is not None and len(protein_sequences) != len(prompts):
-            raise ValueError(f"Length of protein_sequences ({len(protein_sequences)}) must match length of prompts ({len(prompts)})")
-
         url = f"{self.base_url}/generate/"
         
         # Build request payload
         payload = {
-            "prompts": prompts,
+            "input_ids": input_ids.tolist(),
+            "attention_mask": attention_mask.tolist(),
+            "dna_tokenized": dna_tokenized,
+            "batch_idx_map": batch_idx_map,
             "n": n,
             "repetition_penalty": repetition_penalty,
             "temperature": temperature,
@@ -315,12 +310,7 @@ class VLLMClient:
             "guided_decoding_regex": guided_decoding_regex,
             "generation_kwargs": generation_kwargs or {},
         }
-        
-        # Add biological sequences if provided
-        if dna_sequences is not None:
-            payload["dna_sequences"] = dna_sequences
-        if protein_sequences is not None:
-            payload["protein_sequences"] = protein_sequences
+
 
         response = self.session.post(url, json=payload)
         
