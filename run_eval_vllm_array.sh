@@ -7,9 +7,10 @@
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=512gb
-#SBATCH --array=0-2               # <-- 3 replicas (use 0-1 for two replicas)
 #SBATCH --output=serve_%A_%a.out
 #SBATCH --error=serve_%A_%a.err
+# #SBATCH --array=0-2               # <-- 3 replicas (use 0-1 for two replicas)
+
 
 set -eo pipefail
 USER=adibvafa
@@ -30,7 +31,7 @@ unset SLURM_TRES_PER_TASK
 
 # ---------- Shared storage ----------
 SCRATCH_BASE="/large_storage/goodarzilab/bioreason"
-SCRATCH_JOB="/home/$USER/trl/vllm_eval"
+SCRATCH_JOB="/home/$USER/trl/vllm_eval_esm3-qwen-4B-finetune-mixed-Qwen3-4B-Thinking-2507-split_go_aspects_4b_2507_lr1e-4_32gpus-stage2"
 
 # Per-replica index/ports/paths
 IDX="${SLURM_ARRAY_TASK_ID}"
@@ -207,7 +208,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --val_split_ratio 0.1 \
     --seed 23 \
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
-    --max_samples 128 \
+    --max_samples -1 \
     --request_batch_size 64 \
     --concurrent_requests 4 \
     --temperature 0 \
@@ -219,7 +220,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --results_out "$REPL_DIR/results.json" \
     > "$EVAL_LOG" 2>&1
   set +x
-  echo "[Replica $IDX] Eval done. Results: $REPL_DIR/results.json"
+  echo "[Replica $IDX] Eval done. Results: $REPL_DIR"
 fi
 
 # ------------------------------------------------------------------------------
