@@ -3,7 +3,7 @@
 #SBATCH --partition=vector_gpu_priority
 #SBATCH --time=24:00:00
 #SBATCH --nodes=1                 # 1 node per array task
-#SBATCH --gpus=2                  # tensor parallel size = 4 per node
+#SBATCH --gpus=2                  # tensor parallel size = 2 per node
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=256gb
@@ -31,7 +31,7 @@ unset SLURM_TRES_PER_TASK
 
 # ---------- Shared storage ----------
 SCRATCH_BASE="/large_storage/goodarzilab/bioreason"
-SCRATCH_JOB="/home/$USER/trl/vllm_eval_v6_stage2_aug27"
+SCRATCH_JOB="/home/$USER/trl/v6_vllm_eval_stage2"
 
 # Per-replica index/ports/paths
 IDX="${SLURM_ARRAY_TASK_ID}"
@@ -210,7 +210,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
     --max_samples -1 \
     --request_batch_size 64 \
-    --concurrent_requests 4 \
+    --concurrent_requests 2 \
     --temperature 0 \
     --top_p 1 \
     --max_new_tokens 6000 \
@@ -221,7 +221,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --joined_outputs_dir "$REPL_DIR/joined_outputs" \
     > "$EVAL_LOG" 2>&1
   set +x
-  echo "[Replica $IDX] Eval done. Results: $REPL_DIR"
+  echo "[Replica $IDX] Eval done. Check: $REPL_DIR/batch_outputs/ (results), $REPL_DIR/joined_outputs/ (joined), $REPL_DIR/error_logs/ (errors)"
 fi
 
 # ------------------------------------------------------------------------------

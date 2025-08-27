@@ -60,12 +60,7 @@ def add_structures_to_dataset(dataset, max_length_protein: int = 2048, num_proc:
     return dataset.map(process_structure, num_proc=num_proc, desc="Adding structures")
 
 
-try:
-    import orjson  # type: ignore
-
-    _dumps = lambda o: orjson.dumps(o).decode()
-except Exception:
-    _dumps = lambda o: json.dumps(o)
+_dumps = lambda o: json.dumps(o, indent=4)
 
 
 async def _post(session: aiohttp.ClientSession, url: str, payload: dict[str, Any], timeout_s: int):
@@ -178,35 +173,59 @@ def build_batches(
     samples, batch_size: int, temperature: float, top_p: float, max_new_tokens: int, repetition_penalty: float
 ):
     batches = []
+    filtered_errors = []
+    
     for i in range(0, len(samples), batch_size):
         end = min(i + batch_size, len(samples))
         batch_ds = samples.select(range(i, end))
         protein_ids, prompts, assistant_texts, protein_seqs, go_aspects, structure_coords = [], [], [], [], [], []
 
         for s in batch_ds:
-            protein_ids.append(s["protein_id"])
-            prompts.append(_flatten_user_messages_to_text(s["prompt"]))
-            assistant_texts.append(_flatten_assistant_messages_to_text(s["prompt"]))
-            protein_seqs.append(s.get("protein_sequences", [s["sequence"]]))
-            go_aspects.append(s.get("go_aspect") or None)
-            structure_coords.append(s.get("structure_coords") or None)
+            # Check protein sequence length before adding to batch
+            seqs = s.get("protein_sequences", [s["sequence"]])
+            max_len_in_sample = max(len(seq) for seq in seqs) if seqs else 0
+            
+            if max_len_in_sample > 1500:
+                # Filter out long proteins - add to error list
+                error_record = {
+                    "protein_id": s["protein_id"],
+                    "sequence_length": max_len_in_sample,
+                    "error": f"Protein sequence too long ({max_len_in_sample} > 1500). Filtered to prevent OOM.",
+                    "prompt": _flatten_user_messages_to_text(s["prompt"]),
+                    "protein_sequences": seqs,
+                    "ground_truth": s.get("ground_truth", ""),
+                    "structure_path": s.get("structure_path", ""),
+                    "success": False
+                }
+                filtered_errors.append(error_record)
+                print(f"⚠️ Filtered protein {s['protein_id']} (length: {max_len_in_sample})")
+            else:
+                # Safe to include in batch
+                protein_ids.append(s["protein_id"])
+                prompts.append(_flatten_user_messages_to_text(s["prompt"]))
+                assistant_texts.append(_flatten_assistant_messages_to_text(s["prompt"]))
+                protein_seqs.append(seqs)
+                go_aspects.append(s.get("go_aspect") or None)
+                structure_coords.append(s.get("structure_coords") or None)
 
-        payload = {
-            "protein_ids": protein_ids,
-            "prompts": prompts,
-            "assistant_texts": assistant_texts,
-            "protein_sequences": protein_seqs,
-            "go_aspects": go_aspects if any(a is not None for a in go_aspects) else None,
-            "structure_coords": structure_coords if any(c is not None for c in structure_coords) else None,
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_new_tokens,
-            "repetition_penalty": repetition_penalty,
-            "generation_kwargs": {},
-        }
-        batches.append(payload)
+        # Only create payload if we have samples in this batch
+        if protein_ids:
+            payload = {
+                "protein_ids": protein_ids,
+                "prompts": prompts,
+                "assistant_texts": assistant_texts,
+                "protein_sequences": protein_seqs,
+                "go_aspects": go_aspects if any(a is not None for a in go_aspects) else None,
+                "structure_coords": structure_coords if any(c is not None for c in structure_coords) else None,
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_new_tokens,
+                "repetition_penalty": repetition_penalty,
+                "generation_kwargs": {},
+            }
+            batches.append(payload)
 
-    return batches
+    return batches, filtered_errors
 
 
 async def main(args):
@@ -238,7 +257,7 @@ async def main(args):
     samples = add_structures_to_dataset(samples, max_length_protein=args.max_length_protein)
     print(f"📊 {len(samples)} samples loaded")
 
-    batches = build_batches(
+    batches, filtered_errors = build_batches(
         samples=samples,
         batch_size=args.request_batch_size,
         temperature=args.temperature,
@@ -247,6 +266,16 @@ async def main(args):
         repetition_penalty=args.repetition_penalty,
     )
 
+    # Save filtered errors (long proteins)
+    if filtered_errors:
+        error_dir = os.path.join(os.path.dirname(args.batch_inputs_dir), "error_logs")
+        os.makedirs(error_dir, exist_ok=True)
+        
+        prefilter_filename = os.path.join(error_dir, "prefiltered_long_proteins.json")
+        with open(prefilter_filename, "w") as f:
+            json.dump(filtered_errors, f, indent=4)
+        print(f"🚫 Saved {len(filtered_errors)} long proteins (>1500 residues) → {prefilter_filename}")
+
     if batches:
         os.makedirs(args.batch_inputs_dir, exist_ok=True)
         for i, batch in enumerate(batches):
@@ -254,6 +283,12 @@ async def main(args):
             with open(batch_filename, "w") as f:
                 json.dump(batch, f, indent=4)
             print(f"💾 Saved batch {i} payload → {batch_filename}")
+    
+    # Updated summary
+    total_samples = len(samples)
+    batched_samples = sum(len(b["protein_ids"]) for b in batches)
+    filtered_samples = len(filtered_errors)
+    print(f"📊 Summary: {total_samples} total → {batched_samples} batched, {filtered_samples} filtered (length > 1500)")
 
     t0 = time.time()
     connector = aiohttp.TCPConnector(limit=args.concurrent_requests)
@@ -264,6 +299,9 @@ async def main(args):
             async with sem:
                 try:
                     result = await _post(sess, f"{server}/generate/", payload, args.client_timeout_sec)
+                    # Check if server returned an error response (new error handling)
+                    if isinstance(result, dict) and "error" in result:
+                        return {"success": False, "result": None, "error": result["error"]}
                     return {"success": True, "result": result, "error": None}
                 except Exception as e:
                     return {"success": False, "result": None, "error": str(e)}
@@ -327,7 +365,7 @@ async def main(args):
                 print(f"❌ Saved batch {i} error → {error_filename}")
                 failed_batches += 1
 
-        print(f"📊 Summary: {successful_batches} successful, {failed_batches} failed batches")
+        print(f"📊 Final Summary: {successful_batches} successful batches, {failed_batches} failed batches, {len(filtered_errors)} prefiltered proteins")
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ DNA_LLM_AVAILABLE = False
 
 _MAIN_TEXT_TOKENIZER = None
 
+
 def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenizer":
     """
     Lazily load the text tokenizer once in the FastAPI (parent) process.
@@ -60,6 +61,7 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
         applied_template = False
         try:
             import os
+
             local_ct_path = os.path.join(model_name, "chat_template.jinja")
             if os.path.isfile(local_ct_path):
                 with open(local_ct_path, "r", encoding="utf-8") as f:
@@ -76,6 +78,7 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
                 try:
                     # Prefer local templates directory if present
                     from pathlib import Path
+
                     here = Path(__file__).parent
                     candidate = here / "templates" / "qwen3_4b_chat_template.jinja2"
                     if candidate.is_file():
@@ -84,7 +87,7 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
                         applied_template = True
                 except Exception:
                     pass
-            if not applied_template and 'get_chat_template' in globals():
+            if not applied_template and "get_chat_template" in globals():
                 try:
                     chat_template = get_chat_template(model_name)
                     tok.chat_template = chat_template
@@ -92,7 +95,7 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
                     applied_template = True
                 except Exception as e:
                     print(f"⚠️ Failed to apply dynamic chat template: {e}")
-        
+
         tok.pad_token = tok.eos_token
         _MAIN_TEXT_TOKENIZER = tok
     return _MAIN_TEXT_TOKENIZER
@@ -101,10 +104,10 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
 def load_dna_components():
     """Load DNA components only when needed."""
     global DNA_LLM_AVAILABLE, DNAInput, DLProcessor, CHAT_TEMPLATE, EVO2_AVAILABLE
-    
+
     if DNA_LLM_AVAILABLE:
         return  # Already loaded
-        
+
     try:
         import torch
         import torch.nn as nn
@@ -114,37 +117,39 @@ def load_dna_components():
             AutoModelForMaskedLM,
             AutoConfig,
         )
-        
+
         from bioreason.utils.dna_utils import DNAInput as RealDNAInput
         from bioreason.models.dl.processing_dl import DLProcessor as RealDLProcessor
         from bioreason.models.dl.chat_template_dl import CHAT_TEMPLATE as RealCHAT_TEMPLATE
-        
+
         # Only override if real components are available
         DNAInput = RealDNAInput
         DLProcessor = RealDLProcessor
         CHAT_TEMPLATE = RealCHAT_TEMPLATE
-        
+
         # Try to import Evo2 components
         try:
             from bioreason.models.evo2_tokenizer import Evo2Tokenizer, register_evo2_tokenizer
+
             register_evo2_tokenizer()
             EVO2_AVAILABLE = True
         except ImportError:
             EVO2_AVAILABLE = False
             print("Warning: Evo2 tokenizer not available")
-        
+
         DNA_LLM_AVAILABLE = True
         print("✅ DNA-LLM components loaded successfully")
-        
+
     except ImportError as e:
         print(f"Warning: DNA-LLM components not available: {e}")
         print("DNA functionality will be disabled - using fallback classes")
+
 
 def load_protein_components():
     """Load protein components only when needed."""
     global ProteinInput, PLProcessor, PROTEIN_CHAT_TEMPLATE, get_chat_template, get_all_special_tokens, get_token
     global create_protein_encoder, create_go_graph_encoder_pipeline
-        
+
     try:
         # Import protein utilities - following ProteinLLMModel pattern exactly
         from bioreason2.utils.protein_utils import ProteinInput as RealProteinInput
@@ -153,44 +158,50 @@ def load_protein_components():
         from bioreason2.models.protein_encoder import create_protein_encoder
         from bioreason2.models.go_graph_encoder import create_go_graph_encoder_pipeline
         from bioreason2.models.special_tokens import get_all_special_tokens, get_token
-        
+
         # ESM3 imports for protein processing
         from esm.models.esm3 import ESM3
         from esm.sdk.api import ESMProtein, SamplingConfig
         from esm.utils.constants.models import ESM3_OPEN_SMALL
-        
+
         # Only override if real components are available
         ProteinInput = RealProteinInput
         PLProcessor = RealPLProcessor
         # Set PROTEIN_CHAT_TEMPLATE to None - it will be set dynamically using get_chat_template()
         PROTEIN_CHAT_TEMPLATE = None
-        
+
         print("✅ Protein-LLM components loaded successfully")
-        
+
     except ImportError as e:
         print(f"Warning: Protein-LLM components not available: {e}")
         print("Protein functionality will be disabled - using fallback classes")
 
+
 CHAT_TEMPLATE = "{%- set dna_count = namespace(value=0) %}{%- set protein_count = namespace(value=0) %}{%- if tools %}\n    {{- '<|im_start|>system\\n' }}\n    {%- if messages[0].role == 'system' %}\n        {{- messages[0].content + '\\n\\n' }}\n    {%- endif %}\n    {{- \"# Tools\\n\\nYou may call one or more functions to assist with the user query.\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>\" }}\n    {%- for tool in tools %}\n        {{- \"\\n\" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- \"\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\\"name\\\": <function-name>, \\\"arguments\\\": <args-json-object>}\\n</tool_call><|im_end|>\\n\" }}\n{%- else %}\n    {%- if messages[0].role == 'system' %}\n        {{- '<|im_start|>system\\n' + messages[0].content + '<|im_end|>\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}\n{%- for message in messages[::-1] %}\n    {%- set index = (messages|length - 1) - loop.index0 %}\n    {%- if ns.multi_step_tool and message.role == \"user\" and not(message.content is string and message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}\n        {%- set ns.multi_step_tool = false %}\n        {%- set ns.last_query_index = index %}\n    {%- endif %}\n{%- endfor %}\n{%- for message in messages %}\n    {%- if (message.role == \"user\") or (message.role == \"system\" and not loop.first) %}\n        {{- '<|im_start|>' + message.role + '\\n' }} {%- if message.content is string %}{{- message.content + '<|im_end|>' + '\\n' }}{%- else %}{%- for content in message.content %}{%- if content.type == 'dna' or 'dna' in content %}{%- set dna_count.value = dna_count.value + 1 %}{%- if add_dna_id %}DNA Sequence {{- dna_count.value }}: {%- endif %}<|dna_start|><|dna_pad|><|dna_end|>{%- elif content.type == 'protein' or 'protein' in content %}{%- set protein_count.value = protein_count.value + 1 %}{%- if add_protein_id %}Protein Sequence {{- protein_count.value }}: {%- endif %}<|protein_start|><|protein_pad|><|protein_end|>{%- elif 'text' in content %}{{- content.text }}{%- endif %}{%- endfor %}{{- '<|im_end|>' + '\\n' }}{%- endif %}{%- elif message.role == \"assistant\" %}\n        {%- set content = message.content[0].text %}\n        {%- set reasoning_content = '' %}\n        {%- if message.reasoning_content is defined and message.reasoning_content is not none %}\n            {%- set reasoning_content = message.reasoning_content %}\n        {%- else %}\n            {%- if '</think>' in message.content %}\n                {%- set content = message.content[0].text.split('</think>')[-1].lstrip('\\n') %}\n                {%- set reasoning_content = message.content[0].text.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') %}\n            {%- endif %}\n        {%- endif %}\n        {%- if loop.index0 > ns.last_query_index %}\n            {%- if loop.last or (not loop.last and reasoning_content) %}\n                {{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content.strip('\\n') + '\\n</think>\\n\\n' + content.lstrip('\\n') }}\n            {%- else %}\n                {{- '<|im_start|>' + message.role + '\\n' + content }}\n            {%- endif %}\n        {%- else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n        {%- endif %}\n        {%- if message.tool_calls %}\n            {%- for tool_call in message.tool_calls %}\n                {%- if (loop.first and content) or (not loop.first) %}\n                    {{- '\\n' }}\n                {%- endif %}\n                {%- if tool_call.function %}\n                    {%- set tool_call = tool_call.function %}\n                {%- endif %}\n                {{- '<tool_call>\\n{\"name\": \"' }}\n                {{- tool_call.name }}\n                {{- '\", \"arguments\": ' }}\n                {%- if tool_call.arguments is string %}\n                    {{- tool_call.arguments }}\n                {%- else %}\n                    {{- tool_call.arguments | tojson }}\n                {%- endif %}\n                {{- '}\\n</tool_call>' }}\n            {%- endfor %}\n        {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if loop.first or (messages[loop.index0 - 1].role != \"tool\") %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- message.content }}\n        {{- '\\n</tool_response>' }}\n        {%- if loop.last or (messages[loop.index0 + 1].role != \"tool\") %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n    {%- if enable_thinking is defined and enable_thinking is false %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n    {%- endif %}\n{%- endif %}"
 
 EVO2_AVAILABLE = False
+
 
 # Fallback classes when components aren't available
 class FallbackDNAInput:
     def __init__(self, *args, **kwargs):
         pass
 
+
 class FallbackDLProcessor:
     def __init__(self, *args, **kwargs):
         pass
+
 
 class FallbackProteinInput:
     def __init__(self, *args, **kwargs):
         pass
 
+
 class FallbackPLProcessor:
     def __init__(self, *args, **kwargs):
         pass
+
 
 # Initialize fallback variables
 DNAInput = FallbackDNAInput
@@ -204,6 +215,7 @@ PROTEIN_CHAT_TEMPLATE = None
 try:
     get_chat_template  # type: ignore[name-defined]
 except Exception:
+
     def get_chat_template(model_name: str) -> str:  # noqa: N802
         import os
         from pathlib import Path
@@ -336,6 +348,7 @@ class WeightSyncWorkerExtension:
 @dataclass
 class ScriptArguments:
     """Arguments for the vLLM serve script."""
+
     model: str = field(metadata={"help": "Model name or path to load the model from."})
     revision: Optional[str] = field(default=None, metadata={"help": "Revision to use for the model."})
     tensor_parallel_size: int = field(default=1, metadata={"help": "Number of tensor parallel workers to use."})
@@ -345,36 +358,57 @@ class ScriptArguments:
     gpu_memory_utilization: float = field(default=0.8, metadata={"help": "GPU memory utilization ratio for vLLM."})
     dtype: str = field(default="auto", metadata={"help": "Data type to use for vLLM generation."})
     max_model_len: Optional[int] = field(default=None, metadata={"help": "Maximum model length for vLLM."})
-    enable_prefix_caching: Optional[bool] = field(default=None, metadata={"help": "Whether to enable prefix caching in vLLM."})
+    enable_prefix_caching: Optional[bool] = field(
+        default=None, metadata={"help": "Whether to enable prefix caching in vLLM."}
+    )
     enforce_eager: Optional[bool] = field(default=False, metadata={"help": "Whether to enforce eager execution."})
     kv_cache_dtype: str = field(default="auto", metadata={"help": "Data type to use for KV cache."})
-    trust_remote_code: bool = field(default=False, metadata={"help": "Whether to trust remote code when loading models."})
+    trust_remote_code: bool = field(
+        default=False, metadata={"help": "Whether to trust remote code when loading models."}
+    )
     batch_inference: bool = field(default=False, metadata={"help": "Whether to enable batch inference."})
     # Optional custom tokenizer path or name.  If provided, vLLM will load
     # this tokenizer instead of the one bundled with the model.  Use this to
     # point to a folder that contains `tokenizer.json` created with
     # `AutoTokenizer(..., use_fast=True).save_pretrained(...)` in order to
     # enable the much faster Rust tokenizer for models that ship without it.
-    tokenizer: Optional[str] = field(default=None, metadata={"help": "Tokenizer name or path to use (defaults to model's tokenizer)."})
+    tokenizer: Optional[str] = field(
+        default=None, metadata={"help": "Tokenizer name or path to use (defaults to model's tokenizer)."}
+    )
     log_level: str = field(default="info", metadata={"help": "Log level for uvicorn."})
 
-    
     # DNA-specific parameters
-    dna_model_name: Optional[str] = field(default=None, metadata={"help": "DNA model name or path for multimodal DNA+text generation."})
+    dna_model_name: Optional[str] = field(
+        default=None, metadata={"help": "DNA model name or path for multimodal DNA+text generation."}
+    )
     dna_is_evo2: bool = field(default=False, metadata={"help": "Whether the DNA model is Evo2."})
-    dna_embedding_layer: Optional[str] = field(default=None, metadata={"help": "Name of the layer to use for the Evo2 model."})
+    dna_embedding_layer: Optional[str] = field(
+        default=None, metadata={"help": "Name of the layer to use for the Evo2 model."}
+    )
     max_length_dna: int = field(default=2048, metadata={"help": "Maximum length of DNA sequences."})
-    use_dna_llm: bool = field(default=False, metadata={"help": "Whether to enable DNA processing for multimodal DNA+text generation."})
-    
+    use_dna_llm: bool = field(
+        default=False, metadata={"help": "Whether to enable DNA processing for multimodal DNA+text generation."}
+    )
+
     # Protein-specific parameters
-    protein_model_name: Optional[str] = field(default="esm3_sm_open_v1", metadata={"help": "Protein model name or path for multimodal protein+text generation."})
+    protein_model_name: Optional[str] = field(
+        default="esm3_sm_open_v1",
+        metadata={"help": "Protein model name or path for multimodal protein+text generation."},
+    )
     max_length_protein: int = field(default=2048, metadata={"help": "Maximum length of protein sequences."})
-    use_protein_llm: bool = field(default=False, metadata={"help": "Whether to enable protein processing for multimodal protein+text generation."})
-    
+    use_protein_llm: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable protein processing for multimodal protein+text generation."},
+    )
+
     # Environment validation
     skip_env_check: bool = field(default=False, metadata={"help": "Skip the fuckvllm environment validation check."})
-    go_obo_path: Optional[str] = field(default=None, metadata={"help": "Path to GO ontology .obo (enables GO encoder)."})
-    precomputed_go_embeddings_path: Optional[str] = field(default=None, metadata={"help": "Path to precomputed GO embeddings dir."})
+    go_obo_path: Optional[str] = field(
+        default=None, metadata={"help": "Path to GO ontology .obo (enables GO encoder)."}
+    )
+    precomputed_go_embeddings_path: Optional[str] = field(
+        default=None, metadata={"help": "Path to precomputed GO embeddings dir."}
+    )
     go_embedding_dim: int = field(default=2560, metadata={"help": "Dim of GO embeddings before projection."})
     go_hidden_dim: int = field(default=512, metadata={"help": "Hidden dim for GO GAT."})
     go_num_gat_layers: int = field(default=3, metadata={"help": "GAT layers for GO encoder."})
@@ -382,8 +416,9 @@ class ScriptArguments:
     go_num_reduced_embeddings: int = field(default=200, metadata={"help": "Reduced embeddings per GO namespace."})
 
 
-
-def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection) -> None:
+def llm_worker(
+    script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
+) -> None:
     """Worker process for handling vLLM generation with optional DNA/protein processing."""
     # Set required environment variables for DP to work with vLLM
     os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
@@ -413,6 +448,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
             fast_dir.mkdir(exist_ok=True)
             try:
                 from transformers import AutoTokenizer
+
                 print(f"🪄 Building fast tokenizer in {fast_dir} …")
                 tok = AutoTokenizer.from_pretrained(model_dir, use_fast=True, trust_remote_code=True)
                 tok.save_pretrained(fast_dir)
@@ -445,18 +481,18 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
     # Initialize biological sequence processing components (DNA OR protein, not both)
     dna_processor = None
     protein_processor = None
-    
+
     # Check for conflicting biological sequence processing requests
     dna_requested = script_args.use_dna_llm and script_args.dna_model_name
     protein_requested = script_args.use_protein_llm and script_args.protein_model_name
-    
+
     if dna_requested and protein_requested:
         print("⚠️  WARNING: Both DNA and protein processing requested!")
         print("⚠️  Only one biological sequence type can be processed at a time.")
         print("⚠️  Prioritizing DNA processing and disabling protein processing.")
         print("⚠️  To use protein processing, set --use_dna_llm=False")
         protein_requested = False
-    
+
     # Initialize DNA processing components if needed
     if dna_requested:
         try:
@@ -498,7 +534,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
         except Exception as e:
             print(f"❌ Failed to initialize protein processor: {e}")
             protein_processor = None
-    
+
     # Log the final configuration
     if dna_processor:
         print("🧬 Worker configured for DNA sequence processing")
@@ -514,7 +550,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
         try:
             command = connection.recv()
         except KeyboardInterrupt:
-            if hasattr(llm, 'collective_rpc'):
+            if hasattr(llm, "collective_rpc"):
                 llm.collective_rpc(method="close_communicator")
             break
 
@@ -522,34 +558,59 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
         if command["type"] in ["call", "fire_and_forget"]:
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
-            
-            # NEW: direct prompt_embeds path -----------------------------------------------------
-            if method_name == "generate" and "prompt_embeds" in kwargs:
-                # kwargs["prompt_embeds"] is either a single 2-D list or a list of 2-D lists (batched)
-                embeds_payload = kwargs.pop("prompt_embeds")
-                sampling_params = kwargs.get("sampling_params", SamplingParams()) if SamplingParams is not None else kwargs.get("sampling_params")
 
-                # Normalise to list of embeddings
-                if isinstance(embeds_payload[0][0], (float, int)):
-                    embeds_payload = [embeds_payload]  # single sample -> list of one
+            try:
+                # NEW: direct prompt_embeds path -----------------------------------------------------
+                if method_name == "generate" and "prompt_embeds" in kwargs:
+                    # kwargs["prompt_embeds"] is either a single 2-D list or a list of 2-D lists (batched)
+                    embeds_payload = kwargs.pop("prompt_embeds")
+                    sampling_params = (
+                        kwargs.get("sampling_params", SamplingParams())
+                        if SamplingParams is not None
+                        else kwargs.get("sampling_params")
+                    )
 
-                outputs_all = []
-                for emb_idx, emb_list in enumerate(embeds_payload):
-                    emb_tensor = torch.tensor(emb_list, dtype=torch.float16, device="cuda:0")  # cast to fp16 to save memory
-                    out = llm.generate({"prompt_embeds": emb_tensor}, sampling_params=sampling_params)
-                    outputs_all.extend(out)
-                result = outputs_all
-            # -----------------------------------------------------------------------------------
-            elif method_name == "generate" and dna_processor is not None:
-                result = generate_with_dna_embeddings(llm, dna_processor, kwargs, device)
-            # Handle protein-enhanced generation
-            elif method_name == "generate" and protein_processor is not None:
-                result = generate_with_protein_embeddings(llm, protein_processor, kwargs, device)
-            else:
-                # Standard vLLM handling (including pre-processed embeddings)
-                method = getattr(llm, method_name)
-                result = method(*args, **kwargs)
-                
+                    # Normalise to list of embeddings
+                    if isinstance(embeds_payload[0][0], (float, int)):
+                        embeds_payload = [embeds_payload]  # single sample -> list of one
+
+                    outputs_all = []
+                    for emb_idx, emb_list in enumerate(embeds_payload):
+                        emb_tensor = torch.tensor(
+                            emb_list, dtype=torch.float16, device="cuda:0"
+                        )  # cast to fp16 to save memory
+                        out = llm.generate({"prompt_embeds": emb_tensor}, sampling_params=sampling_params)
+                        outputs_all.extend(out)
+                    result = outputs_all
+                # -----------------------------------------------------------------------------------
+                elif method_name == "generate" and dna_processor is not None:
+                    result = generate_with_dna_embeddings(llm, dna_processor, kwargs, device)
+                # Handle protein-enhanced generation
+                elif method_name == "generate" and protein_processor is not None:
+                    result = generate_with_protein_embeddings(llm, protein_processor, kwargs, device)
+                else:
+                    # Standard vLLM handling (including pre-processed embeddings)
+                    method = getattr(llm, method_name)
+                    result = method(*args, **kwargs)
+
+            except Exception as e:
+                # Create standardized error response instead of crashing worker
+                error_msg = str(e)
+                print(f"❌ Worker error (continuing): {error_msg}")
+
+                # Format error response to match expected output structure
+                if method_name == "generate":
+                    result = {
+                        "completion_ids": [],
+                        "completions": [],
+                        "error": error_msg,
+                        "generation_time": 0.0,
+                        "tokens_per_second": 0.0,
+                        "total_tokens": 0,
+                    }
+                else:
+                    result = {"error": error_msg}
+
             if command["type"] == "call":
                 connection.send(result)
         elif command["type"] == "shutdown":
@@ -567,7 +628,7 @@ class DNAEmbeddingProcessor:
     DNA embedding processor that replicates DNALLMModel's DNA processing functionality.
     Based exactly on the reference DNALLMModel implementation.
     """
-    
+
     def __init__(
         self,
         dna_model_name: str,
@@ -579,24 +640,22 @@ class DNAEmbeddingProcessor:
     ):
         if not DNA_LLM_AVAILABLE:
             raise RuntimeError("DNA-LLM components not available. Please install bioreason package.")
-        
+
         self.device = device
         print(f"🧬 Initializing DNAEmbeddingProcessor on device {self.device}...")
         print(f"  DNA model: {dna_model_name}")
         print(f"  Text model: {text_model_name}")
         print(f"  Evo2: {dna_is_evo2}")
         print(f"  Embedding layer: {dna_embedding_layer}")
-        
+
         self.dna_is_evo2 = dna_is_evo2
         self.dna_embedding_layer = dna_embedding_layer
         self.max_length_dna = max_length_dna
-        
+
         # STEP 1: Load DNA model and tokenizer (exactly like DNALLMModel)
         print("🧬 Loading DNA model and tokenizer...")
         if not self.dna_is_evo2:
-            self.dna_model = AutoModelForMaskedLM.from_pretrained(
-                dna_model_name, trust_remote_code=True
-            )
+            self.dna_model = AutoModelForMaskedLM.from_pretrained(dna_model_name, trust_remote_code=True)
             self.dna_tokenizer = AutoTokenizer.from_pretrained(dna_model_name, trust_remote_code=True)
             self.dna_config = self.dna_model.config
         else:
@@ -604,12 +663,13 @@ class DNAEmbeddingProcessor:
                 raise ImportError("Evo2 is required when dna_is_evo2=True. Please install the evo2 package.")
             try:
                 from evo2 import Evo2
+
                 self.dna_model = Evo2(dna_model_name)
                 self.dna_tokenizer = Evo2Tokenizer(self.dna_model.tokenizer)
                 self.dna_config = self.dna_model.model.config
             except ImportError:
                 raise ImportError("Evo2 is required when dna_is_evo2=True. Please install the evo2 package.")
-        
+
         self.dna_model = self.dna_model.to(self.device)
         print("✅ DNA model loaded successfully")
 
@@ -649,7 +709,7 @@ class DNAEmbeddingProcessor:
         # STEP 6: Create minimal embedding layer for text embeddings
         self._embedding_layer = None
         self._text_model_name = text_model_name
-        
+
         # Initialize the embedding layer immediately to catch any issues early
         print("🧬 Pre-initializing embedding layer...")
         try:
@@ -664,20 +724,20 @@ class DNAEmbeddingProcessor:
             print("   Will retry when needed")
 
         print("✅ DNAEmbeddingProcessor initialized successfully")
-    
+
     def load_custom_components(self, llm_dir: str) -> None:
         """Load trained DNA projection weights (exactly like DNALLMModel)."""
         import os
-        
+
         # Try to load DNA projection layer weights
-        projection_path = os.path.join(llm_dir, 'dna_projection.pt')
+        projection_path = os.path.join(llm_dir, "dna_projection.pt")
         if os.path.exists(projection_path):
             print(f"🔧 Loading trained DNA projection weights from {projection_path}")
             try:
-                projection_state = torch.load(projection_path, map_location='cpu')
-                
+                projection_state = torch.load(projection_path, map_location="cpu")
+
                 # Check if we can load the weights
-                if self.dna_projection.weight.shape == projection_state['weight'].shape:
+                if self.dna_projection.weight.shape == projection_state["weight"].shape:
                     self.dna_projection.load_state_dict(projection_state)
                     print("✅ Trained DNA projection weights loaded successfully")
                 else:
@@ -691,9 +751,9 @@ class DNAEmbeddingProcessor:
         else:
             print(f"⚠️ No trained DNA projection weights found at {projection_path}")
             print("  Using randomly initialized projection layer (may affect quality)")
-        
+
         # Check if there's a local DNA model (optional)
-        dna_model_path = os.path.join(llm_dir, 'dna_model')
+        dna_model_path = os.path.join(llm_dir, "dna_model")
         if os.path.exists(dna_model_path) and not self.dna_is_evo2:
             print(f"📁 Found local DNA model at {dna_model_path}")
             try:
@@ -707,23 +767,23 @@ class DNAEmbeddingProcessor:
             except Exception as e:
                 print(f"⚠️ Error loading local DNA model: {e}")
                 print("  Using original DNA model")
-    
+
     def get_text_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Get text embeddings using a minimal embedding layer (vLLM mode only)."""
         # For vLLM mode, we need to create a minimal embedding layer without loading the full model
-        if not hasattr(self, '_embedding_layer') or self._embedding_layer is None:
+        if not hasattr(self, "_embedding_layer") or self._embedding_layer is None:
             print("⚠️ vLLM mode: Creating minimal embedding layer for DNA integration...")
-            
+
             # Load only the embedding layer from the model config
             embed_dim = self.text_config.hidden_size
             vocab_size = self.text_config.vocab_size
-            
+
             print(f"🧬 Creating embedding layer: vocab_size={vocab_size}, embed_dim={embed_dim}")
-            
+
             # Ensure we're working with valid dimensions
             if embed_dim <= 0 or vocab_size <= 0:
                 raise ValueError(f"Invalid embedding dimensions: vocab_size={vocab_size}, embed_dim={embed_dim}")
-            
+
             # Create the embedding layer
             try:
                 self._embedding_layer = nn.Embedding(vocab_size, embed_dim)
@@ -731,23 +791,24 @@ class DNAEmbeddingProcessor:
             except Exception as e:
                 print(f"❌ Failed to create embedding layer: {e}")
                 raise RuntimeError(f"Failed to create nn.Embedding: {e}")
-            
+
             # Verify the embedding layer was created
             if self._embedding_layer is None:
                 raise RuntimeError("Embedding layer creation returned None")
-            
+
             # Try to load embedding weights from the saved model if available
             try:
                 import os
+
                 model_path = self._text_model_name  # Use the text model name path
                 print(f"🧬 Looking for embedding weights in: {model_path}")
-                
+
                 if model_path and os.path.exists(model_path):
                     # Load just the embedding weights from safetensors
                     try:
                         import safetensors
                         from safetensors import safe_open
-                        
+
                         # Try safetensors first
                         safetensors_path = os.path.join(model_path, "model.safetensors")
                         if os.path.exists(safetensors_path):
@@ -759,6 +820,7 @@ class DNAEmbeddingProcessor:
                         else:
                             # Try multiple safetensors files (for sharded models)
                             import glob
+
                             shard_files = glob.glob(os.path.join(model_path, "model-*.safetensors"))
                             print(f"🧬 Found {len(shard_files)} shard files")
                             if shard_files:
@@ -782,11 +844,11 @@ class DNAEmbeddingProcessor:
             except Exception as e:
                 print(f"⚠️ Could not load embedding weights: {e}")
                 print("   Using randomly initialized embeddings")
-            
+
             # Move to same device as input - be careful not to lose the reference
             print(f"🧬 Moving embedding layer to device: {input_ids.device}")
             try:
-                if input_ids.device.type != 'cpu':
+                if input_ids.device.type != "cpu":
                     self._embedding_layer = self._embedding_layer.to(input_ids.device)
                 print(f"🧬 Embedding layer ready: {self._embedding_layer}")
                 print(f"🧬 Embedding layer type: {type(self._embedding_layer)}")
@@ -794,28 +856,30 @@ class DNAEmbeddingProcessor:
             except Exception as e:
                 print(f"❌ Error moving embedding layer to device: {e}")
                 raise RuntimeError(f"Failed to move embedding layer to device: {e}")
-        
+
         # Final verification before use
         if self._embedding_layer is None:
             raise RuntimeError("CRITICAL: _embedding_layer is None after initialization")
-            
+
         if not callable(self._embedding_layer):
             raise RuntimeError(f"CRITICAL: Embedding layer is not callable - type: {type(self._embedding_layer)}")
-        
-        if not hasattr(self._embedding_layer, 'weight'):
-            raise RuntimeError(f"CRITICAL: Embedding layer has no weight attribute - type: {type(self._embedding_layer)}")
-            
+
+        if not hasattr(self._embedding_layer, "weight"):
+            raise RuntimeError(
+                f"CRITICAL: Embedding layer has no weight attribute - type: {type(self._embedding_layer)}"
+            )
+
         # Ensure input is on the same device as the embedding layer
         embedding_device = next(self._embedding_layer.parameters()).device
         print(f"🧬 Input device: {input_ids.device}, Embedding device: {embedding_device}")
-        
+
         # Move input to the correct device if needed
         if input_ids.device != embedding_device:
             print(f"🧬 Moving input from {input_ids.device} to {embedding_device}")
             input_ids = input_ids.to(embedding_device)
-        
+
         print(f"🧬 Calling embedding layer with input shape: {input_ids.shape}")
-        
+
         try:
             result = self._embedding_layer(input_ids)
             print(f"🧬 Embedding layer output shape: {result.shape}")
@@ -850,28 +914,26 @@ class DNAEmbeddingProcessor:
             if self.dna_is_evo2 and self.dna_embedding_layer is not None:  # Evo2 model
                 # Get embeddings from the specific layer in Evo2
                 hidden_states_list = []
-                
+
                 for seq_idx in range(len(dna_tokenized["input_ids"])):
                     # Extract single sequence
-                    input_ids = dna_tokenized["input_ids"][seq_idx:seq_idx+1]
-                    
+                    input_ids = dna_tokenized["input_ids"][seq_idx : seq_idx + 1]
+
                     # Call Evo2 with return_embeddings=True
                     _, embeddings = self.dna_model(
-                        input_ids,
-                        return_embeddings=True,
-                        layer_names=[self.dna_embedding_layer]
+                        input_ids, return_embeddings=True, layer_names=[self.dna_embedding_layer]
                     )
-                    
+
                     # Get embeddings for the specified layer
                     seq_embeddings = embeddings[self.dna_embedding_layer].squeeze(0)
                     hidden_states_list.append(seq_embeddings)
-                
+
                 # Stack to get same format as non-Evo2 output
                 if hidden_states_list:
                     hidden_states = torch.stack(hidden_states_list)
                 else:
                     return [torch.zeros((0, self.text_hidden_size)) for _ in range(batch_size)]
-                    
+
             else:  # Standard HuggingFace model
                 # Use existing code path for HF models
                 curr_device = next(self.dna_model.parameters()).device
@@ -889,7 +951,9 @@ class DNAEmbeddingProcessor:
                 hidden_states = outputs.hidden_states[-1]  # shape: [n_seqs, seq_len, hidden_dim]
 
         # Project all embeddings at once
-        hidden_states = hidden_states.to(device=self.dna_projection.weight.device, dtype=self.dna_projection.weight.dtype)
+        hidden_states = hidden_states.to(
+            device=self.dna_projection.weight.device, dtype=self.dna_projection.weight.dtype
+        )
         projected_states = self.dna_projection(hidden_states)
 
         # Group embeddings by batch item - use proper typing
@@ -919,7 +983,7 @@ class ProteinEmbeddingProcessor:
     Protein embedding processor that replicates ProteinLLMModel's protein processing functionality.
     Based exactly on the reference ProteinLLMModel implementation.
     """
-    
+
     def __init__(
         self,
         protein_model_name: str,
@@ -934,14 +998,13 @@ class ProteinEmbeddingProcessor:
         go_num_heads: int = 8,
         go_num_reduced_embeddings: int = 200,
     ):
-        
         self.device = device
         print(f"🧬 Initializing ProteinEmbeddingProcessor on device {self.device}...")
         print(f"  Protein model: {protein_model_name}")
         print(f"  Text model: {text_model_name}")
-        
+
         self.max_length_protein = max_length_protein
-        
+
         # STEP 1: Load protein model (exactly like ProteinLLMModel)
         print("🧬 Loading protein model...")
         from esm.models.esm3 import ESM3
@@ -949,11 +1012,10 @@ class ProteinEmbeddingProcessor:
         from esm.utils.constants.models import ESM3_OPEN_SMALL
         from bioreason2.models.protein_encoder import create_protein_encoder
 
-        self.protein_encoder = create_protein_encoder(protein_model_name)
+        self.protein_encoder = create_protein_encoder(protein_model_name, inference_mode=True)
         self.protein_model = self.protein_encoder.model.to(self.device)
         self.protein_hidden_size = self.protein_encoder.embedding_dim
         print("✅ Protein encoder loaded via create_protein_encoder")
-    
 
         # STEP 2: Load text model config and tokenizer (exactly like ProteinLLMModel)
         print("📝 Loading text tokenizer...")
@@ -966,6 +1028,7 @@ class ProteinEmbeddingProcessor:
         # 1) Prefer a chat_template.jinja in the checkpoint directory (text_model_name may be a path)
         try:
             import os
+
             local_ct_path = os.path.join(text_model_name, "chat_template.jinja")
             if os.path.isfile(local_ct_path):
                 with open(local_ct_path, "r", encoding="utf-8") as f:
@@ -982,6 +1045,7 @@ class ProteinEmbeddingProcessor:
             if "Qwen3-4B-Thinking-2507" in short_name:
                 try:
                     from pathlib import Path
+
                     here = Path(__file__).parent
                     candidate = here / "templates" / "qwen3_4b_chat_template.jinja2"
                     if candidate.is_file():
@@ -990,7 +1054,7 @@ class ProteinEmbeddingProcessor:
                         applied_template = True
                 except Exception:
                     pass
-        if not applied_template and 'get_chat_template' in globals():
+        if not applied_template and "get_chat_template" in globals():
             try:
                 chat_template = get_chat_template(text_model_name)
                 self.text_tokenizer.chat_template = chat_template
@@ -1001,26 +1065,27 @@ class ProteinEmbeddingProcessor:
 
         if not applied_template:
             print("⚠️ No chat template found; using default")
-        
+
         self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
         # Add special tokens from centralized module - exactly like ProteinLLMModel
         try:
-            if 'get_all_special_tokens' in globals() and 'get_token' in globals():
+            if "get_all_special_tokens" in globals() and "get_token" in globals():
                 all_special_tokens = get_all_special_tokens()
-                self.text_tokenizer.add_special_tokens(
-                    {"additional_special_tokens": all_special_tokens}
-                )
-                self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids(
-                    get_token("protein_pad")
-                )
-                self.go_token_id = self.text_tokenizer.convert_tokens_to_ids(
-                    get_token("go_graph_pad")
-                )
+                self.text_tokenizer.add_special_tokens({"additional_special_tokens": all_special_tokens})
+                self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids(get_token("protein_pad"))
+                self.go_token_id = self.text_tokenizer.convert_tokens_to_ids(get_token("go_graph_pad"))
                 print("✅ Added special tokens from centralized module")
             else:
                 # Fallback to manual token addition
-                new_tokens = ["<|protein_start|>", "<|protein_pad|>", "<|protein_end|>", "<|go_graph_start|>", "<|go_graph_pad|>", "<|go_graph_end|>"]
+                new_tokens = [
+                    "<|protein_start|>",
+                    "<|protein_pad|>",
+                    "<|protein_end|>",
+                    "<|go_graph_start|>",
+                    "<|go_graph_pad|>",
+                    "<|go_graph_end|>",
+                ]
                 self.text_tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
                 self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids("<|protein_pad|>")
                 self.go_token_id = self.text_tokenizer.convert_tokens_to_ids("<|go_graph_pad|>")
@@ -1063,25 +1128,22 @@ class ProteinEmbeddingProcessor:
 
         # STEP 4: Load custom components (exactly like ProteinLLMModel)
         print("🔧 Loading custom projection weights...")
-        self.load_custom_components(
-            llm_dir=text_model_name,
-            **self._go_cfg
-        )
+        self.load_custom_components(llm_dir=text_model_name, **self._go_cfg)
 
         # STEP 5: Create processor (exactly like ProteinLLMModel)
         self.processor = PLProcessor(tokenizer=self.text_tokenizer)
 
         # Check if GO encoder components are available
-        if 'create_go_graph_encoder_pipeline' in globals():
+        if "create_go_graph_encoder_pipeline" in globals():
             print("🧬 GO graph encoder components available, but not initialized by default")
             print("   (GO encoder will be initialized when needed)")
         else:
             print("⚠️ GO graph encoder components not available")
-            
+
         # STEP 7: Create minimal embedding layer for text embeddings
         self._embedding_layer = None
         self._text_model_name = text_model_name
-        
+
         # Initialize the embedding layer immediately to catch any issues early
         print("🧬 Pre-initializing embedding layer...")
         try:
@@ -1096,7 +1158,7 @@ class ProteinEmbeddingProcessor:
             print("   Will retry when needed")
 
         print("✅ ProteinEmbeddingProcessor initialized successfully")
-    
+
     def load_custom_components(
         self,
         llm_dir: str,
@@ -1112,11 +1174,11 @@ class ProteinEmbeddingProcessor:
         import os
 
         # ===== Protein projection (existing) =====
-        projection_path = os.path.join(llm_dir, 'protein_projection.pt')
+        projection_path = os.path.join(llm_dir, "protein_projection.pt")
         if os.path.exists(projection_path):
             print(f"🔧 Loading trained protein projection weights from {projection_path}")
             try:
-                state = torch.load(projection_path, map_location='cpu')
+                state = torch.load(projection_path, map_location="cpu")
                 # Allow loading either a full Sequential state_dict or a single Linear's weights
                 if isinstance(state, dict):
                     try:
@@ -1132,11 +1194,12 @@ class ProteinEmbeddingProcessor:
             print("⚠️ No trained protein projection found (random init)")
 
         # ===== Optional local protein model (existing) =====
-        protein_model_path = os.path.join(llm_dir, 'protein_model')
+        protein_model_path = os.path.join(llm_dir, "protein_model")
         if os.path.exists(protein_model_path):
             print(f"📁 Found local protein model at {protein_model_path}")
             try:
                 from esm.models.esm3 import ESM3
+
                 self.protein_model = ESM3.from_pretrained(protein_model_path).to(self.device)
                 print("✅ Local protein model loaded successfully")
             except Exception as e:
@@ -1144,10 +1207,13 @@ class ProteinEmbeddingProcessor:
 
         # ===== NEW: GO encoder + projection =====
         # Try to import the pipeline on-demand if not already loaded
-        if 'create_go_graph_encoder_pipeline' not in globals():
+        if "create_go_graph_encoder_pipeline" not in globals():
             try:
-                from bioreason2.models.go_graph_encoder import create_go_graph_encoder_pipeline as _create_go_graph_encoder_pipeline
-                globals()['create_go_graph_encoder_pipeline'] = _create_go_graph_encoder_pipeline
+                from bioreason2.models.go_graph_encoder import (
+                    create_go_graph_encoder_pipeline as _create_go_graph_encoder_pipeline,
+                )
+
+                globals()["create_go_graph_encoder_pipeline"] = _create_go_graph_encoder_pipeline
                 print("✅ Loaded GO encoder pipeline symbol on-demand")
             except Exception as e:
                 print(f"ℹ️ GO encoder code not available; skipping GO initialization ({e})")
@@ -1162,11 +1228,15 @@ class ProteinEmbeddingProcessor:
         if precomputed_embeddings_path is None:
             # Try <model>/go_encoder/embeddings or <model>/go_encoder
             emb_dir = os.path.join(auto_go_dir, "embeddings")
-            precomputed_embeddings_path = emb_dir if os.path.isdir(emb_dir) else (auto_go_dir if os.path.isdir(auto_go_dir) else None)
+            precomputed_embeddings_path = (
+                emb_dir if os.path.isdir(emb_dir) else (auto_go_dir if os.path.isdir(auto_go_dir) else None)
+            )
 
         # If we don't have OBO/embeddings pipeline inputs, but a direct encoder checkpoint exists,
         # we will instantiate an encoder shell and load the state dict.
-        try_init_go = (go_obo_path is not None and precomputed_embeddings_path is not None) or os.path.isfile(auto_go_ckpt)
+        try_init_go = (go_obo_path is not None and precomputed_embeddings_path is not None) or os.path.isfile(
+            auto_go_ckpt
+        )
         if not try_init_go:
             print("ℹ️ GO inputs not provided and no go_encoder.pt found; skipping GO encoder init")
             return
@@ -1218,7 +1288,7 @@ class ProteinEmbeddingProcessor:
             go_proj_path = os.path.join(llm_dir, "go_projection.pt")
             if os.path.exists(go_proj_path):
                 try:
-                    state = torch.load(go_proj_path, map_location='cpu')
+                    state = torch.load(go_proj_path, map_location="cpu")
                     self.go_projection.load_state_dict(state, strict=False)
                     print("✅ Loaded GO projection weights")
                 except Exception as e:
@@ -1226,23 +1296,22 @@ class ProteinEmbeddingProcessor:
             else:
                 print("ℹ️ No go_projection.pt found; using fresh init")
 
-    
     def get_text_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Get text embeddings using a minimal embedding layer (vLLM mode only)."""
         # For vLLM mode, we need to create a minimal embedding layer without loading the full model
-        if not hasattr(self, '_embedding_layer') or self._embedding_layer is None:
+        if not hasattr(self, "_embedding_layer") or self._embedding_layer is None:
             print("⚠️ vLLM mode: Creating minimal embedding layer for protein integration...")
-            
+
             # Load only the embedding layer from the model config
             embed_dim = self.text_config.hidden_size
             vocab_size = self.text_config.vocab_size
-            
+
             print(f"🧬 Creating embedding layer: vocab_size={vocab_size}, embed_dim={embed_dim}")
-            
+
             # Ensure we're working with valid dimensions
             if embed_dim <= 0 or vocab_size <= 0:
                 raise ValueError(f"Invalid embedding dimensions: vocab_size={vocab_size}, embed_dim={embed_dim}")
-            
+
             # Create the embedding layer
             try:
                 self._embedding_layer = nn.Embedding(vocab_size, embed_dim)
@@ -1250,23 +1319,24 @@ class ProteinEmbeddingProcessor:
             except Exception as e:
                 print(f"❌ Failed to create embedding layer: {e}")
                 raise RuntimeError(f"Failed to create nn.Embedding: {e}")
-            
+
             # Verify the embedding layer was created
             if self._embedding_layer is None:
                 raise RuntimeError("Embedding layer creation returned None")
-            
+
             # Try to load embedding weights from the saved model if available
             try:
                 import os
+
                 model_path = self._text_model_name  # Use the text model name path
                 print(f"🧬 Looking for embedding weights in: {model_path}")
-                
+
                 if model_path and os.path.exists(model_path):
                     # Load just the embedding weights from safetensors
                     try:
                         import safetensors
                         from safetensors import safe_open
-                        
+
                         # Try safetensors first
                         safetensors_path = os.path.join(model_path, "model.safetensors")
                         if os.path.exists(safetensors_path):
@@ -1278,6 +1348,7 @@ class ProteinEmbeddingProcessor:
                         else:
                             # Try multiple safetensors files (for sharded models)
                             import glob
+
                             shard_files = glob.glob(os.path.join(model_path, "model-*.safetensors"))
                             print(f"🧬 Found {len(shard_files)} shard files")
                             if shard_files:
@@ -1301,11 +1372,11 @@ class ProteinEmbeddingProcessor:
             except Exception as e:
                 print(f"⚠️ Could not load embedding weights: {e}")
                 print("   Using randomly initialized embeddings")
-            
+
             # Move to same device as input - be careful not to lose the reference
             print(f"🧬 Moving embedding layer to device: {input_ids.device}")
             try:
-                if input_ids.device.type != 'cpu':
+                if input_ids.device.type != "cpu":
                     self._embedding_layer = self._embedding_layer.to(input_ids.device)
                 print(f"🧬 Embedding layer ready: {self._embedding_layer}")
                 print(f"🧬 Embedding layer type: {type(self._embedding_layer)}")
@@ -1313,28 +1384,30 @@ class ProteinEmbeddingProcessor:
             except Exception as e:
                 print(f"❌ Error moving embedding layer to device: {e}")
                 raise RuntimeError(f"Failed to move embedding layer to device: {e}")
-        
+
         # Final verification before use
         if self._embedding_layer is None:
             raise RuntimeError("CRITICAL: _embedding_layer is None after initialization")
-            
+
         if not callable(self._embedding_layer):
             raise RuntimeError(f"CRITICAL: Embedding layer is not callable - type: {type(self._embedding_layer)}")
-        
-        if not hasattr(self._embedding_layer, 'weight'):
-            raise RuntimeError(f"CRITICAL: Embedding layer has no weight attribute - type: {type(self._embedding_layer)}")
-            
+
+        if not hasattr(self._embedding_layer, "weight"):
+            raise RuntimeError(
+                f"CRITICAL: Embedding layer has no weight attribute - type: {type(self._embedding_layer)}"
+            )
+
         # Ensure input is on the same device as the embedding layer
         embedding_device = next(self._embedding_layer.parameters()).device
         print(f"🧬 Input device: {input_ids.device}, Embedding device: {embedding_device}")
-        
+
         # Move input to the correct device if needed
         if input_ids.device != embedding_device:
             print(f"🧬 Moving input from {input_ids.device} to {embedding_device}")
             input_ids = input_ids.to(embedding_device)
-        
+
         print(f"🧬 Calling embedding layer with input shape: {input_ids.shape}")
-        
+
         try:
             result = self._embedding_layer(input_ids)
             print(f"🧬 Embedding layer output shape: {result.shape}")
@@ -1370,7 +1443,6 @@ class ProteinEmbeddingProcessor:
             batch_idx_map=batch_idx_map,
             batch_size=batch_size,
             structure_coords=structure_coords,
-            protein_model_finetune=False,  # server path: inference-time
         )
         # project to text space (kept as-is)
         # Use a stable reference parameter to get device/dtype for Sequential
@@ -1386,7 +1458,6 @@ class ProteinEmbeddingProcessor:
                     dtype=proj_param.dtype,
                 )
         return result
-    
 
     def process_go_aspects(
         self,
@@ -1408,18 +1479,18 @@ class ProteinEmbeddingProcessor:
         """
         if self.go_encoder is None or go_aspects is None:
             return None
-        
+
         batch_go_embeddings = []
-        
-        # Process each example's aspect separately  
+
+        # Process each example's aspect separately
         for i in range(batch_size):
             if i < len(go_aspects) and go_aspects[i] is not None:
                 aspect = go_aspects[i]
-                
+
                 # Get reduced embeddings for this specific aspect (200, 2560)
                 # Use forward() directly to allow gradients during training
                 reduced_embeddings = self.go_encoder.forward(aspect)
-                
+
                 # Project to text embedding space
                 if self.go_projection is not None:
                     reduced_embeddings = reduced_embeddings.to(
@@ -1427,58 +1498,56 @@ class ProteinEmbeddingProcessor:
                         dtype=self.go_projection[0].weight.dtype,
                     )
                     reduced_embeddings = self.go_projection(reduced_embeddings)  # (200, text_hidden_size)
-                
+
                 batch_go_embeddings.append(reduced_embeddings)
             else:
                 # Empty tensor for missing aspects
                 device = next(self.protein_projection.parameters()).device
-                empty_tensor = torch.empty(
-                    (0, self.text_hidden_size),
-                    device=device,
-                    dtype=torch.float
-                )
+                empty_tensor = torch.empty((0, self.text_hidden_size), device=device, dtype=torch.float)
                 batch_go_embeddings.append(empty_tensor)
-        
+
         return batch_go_embeddings
 
 
 def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
     """Generate using standard vLLM with protein embeddings - EXACTLY matches DNA logic."""
     print(f"🧬 generate_with_protein_embeddings called with kwargs keys: {kwargs.keys()}")
-    
+
     if "inputs" in kwargs:
         # Protein+text inputs format
         inputs = kwargs["inputs"]
         print(f"🧬 Processing {len(inputs)} input samples")
-        
+
         # STEP 1: Extract text and protein sequences from inputs (EXACTLY like DNA)
         batch_text = []
         batch_protein_sequences = []
         batch_batch_idx_map = []
         batch_structure_coords = []
         batch_go_aspects = []
-        
+
         for inp in inputs:
             text = inp["text"]
             protein_sequences = inp.get("protein_sequences", [])
             batch_idx_map = inp.get("batch_idx_map", [])
             structure_coords = inp.get("structure_coords", None)
             go_aspects = inp.get("go_aspects", None)
-            
+
             batch_text.append(text)
             batch_protein_sequences.append(protein_sequences)
             batch_batch_idx_map.append(batch_idx_map)
             batch_structure_coords.append(structure_coords)
             batch_go_aspects.append(go_aspects)
-        
-        print(f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists")
+
+        print(
+            f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists"
+        )
         for i, protein_seqs in enumerate(batch_protein_sequences):
             print(f"🧬 Sample {i}: has {len(protein_seqs)} protein sequences")
-        
+
         # STEP 2: Process using PLProcessor (EXACTLY like DNA with DLProcessor)
         print(f"🧬 Calling PLProcessor with text and batch_protein_sequences...")
         print(f"🧬 Text sample: {batch_text[0][:200]}..." if batch_text[0] else "🧬 Empty text")
-        
+
         processed = protein_processor.processor(
             text=batch_text,
             batch_protein_sequences=batch_protein_sequences,
@@ -1487,17 +1556,15 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             batch_go_aspects=batch_go_aspects,
             max_length_text=2048,
             max_length_protein=2048,
-            return_tensors="pt"
+            return_tensors="pt",
         )
 
         structure_coords = processed.get("structure_coords")
-        
-        
-        
+
         # Get input_ids and attention_mask
         input_ids = processed["input_ids"].to(device)
         attention_mask = processed["attention_mask"].to(device)
-        
+
         print(f"🧬 Input IDs shape: {input_ids.shape}")
         print(f"🧬 Attention mask shape: {attention_mask.shape}")
         # for b in range(input_ids.shape[0]):
@@ -1509,37 +1576,34 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         #         decoded.strip().endswith("<|im_start|>assistant"))
         #     print(decoded[-200:])
         #     print("length of decoded: ", len(decoded))
-            
+
         # Check if we have protein data
         protein_sequences_batch = processed.get("protein_sequences")
         batch_idx_map = processed.get("batch_idx_map")
-        
+
         if protein_sequences_batch is not None and len(protein_sequences_batch) > 0:
             print(f"🧬 ✅ Protein data provided - processing protein embeddings...")
             print(f"🧬 Protein sequences count: {len(protein_sequences_batch)}")
             print(f"🧬 Batch idx map: {batch_idx_map}")
-            
+
             batch_size = input_ids.shape[0]
-            
+
             # STEP 3: Process protein embeddings using EXACT same logic as ProteinLLMModel.generate
             protein_embeddings = protein_processor.process_protein_embeddings(
-                protein_sequences_batch,
-                batch_idx_map,
-                batch_size,
-                structure_coords=structure_coords
+                protein_sequences_batch, batch_idx_map, batch_size, structure_coords=structure_coords
             )
-            
+
             # STEP 4: Get text embeddings (EXACT same as ProteinLLMModel.generate)
             print(f"🧬 About to call get_text_embeddings with input_ids shape: {input_ids.shape}")
             text_embeddings = protein_processor.get_text_embeddings(input_ids)
             print(f"🧬 Text embeddings shape: {text_embeddings.shape}")
-            
+
             # STEP 5: Integrate protein embeddings (EXACT same logic as ProteinLLMModel.generate)
             mask = input_ids == protein_processor.protein_token_id
             n_protein_tokens = mask.sum().item()
             protein_embeds_flat = torch.cat(protein_embeddings, dim=0)
             n_protein_features = protein_embeds_flat.shape[0]
-            
+
             print(f"🧬 Found {n_protein_tokens} protein tokens in text")
             print(f"🧬 Generated {n_protein_features} protein features")
 
@@ -1550,85 +1614,77 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
 
             # Ensure protein embeddings have the same dtype as the text embeddings
             protein_embeds_flat = protein_embeds_flat.to(dtype=text_embeddings.dtype, device=text_embeddings.device)
-            
+
             print(f"🧬 Before protein replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             text_embeddings[mask] = protein_embeds_flat
             print(f"🧬 After protein replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             print(f"🧬 Protein successfully integrated into text embeddings!")
-            
+
             # STEP 5.5: Process GO aspects if available
             go_aspects_data = processed.get("go_aspects")
             if go_aspects_data is not None and any(aspect is not None for aspect in go_aspects_data):
                 print(f"🧬 ✅ GO aspects data provided - processing GO embeddings...")
-                
+
                 batch_size = input_ids.shape[0]
-                go_embeddings = protein_processor.process_go_aspects(
-                    go_aspects_data, 
-                    batch_size
-                )
-                
+                go_embeddings = protein_processor.process_go_aspects(go_aspects_data, batch_size)
+
                 if go_embeddings is not None:
                     # Find positions where GO tokens should be replaced
                     go_mask = input_ids == protein_processor.go_token_id
                     n_go_tokens = go_mask.sum().item()
                     go_embeds_flat = torch.cat([emb for emb in go_embeddings if emb.numel() > 0], dim=0)
                     n_go_features = go_embeds_flat.shape[0] if go_embeds_flat.numel() > 0 else 0
-                    
+
                     print(f"🧬 Found {n_go_tokens} GO tokens in text")
                     print(f"🧬 Generated {n_go_features} GO features")
-                    
+
                     if n_go_features != n_go_tokens:
-                        print(f"⚠️ Warning: GO features and GO tokens do not match: features {n_go_features}, tokens: {n_go_tokens}")
+                        print(
+                            f"⚠️ Warning: GO features and GO tokens do not match: features {n_go_features}, tokens: {n_go_tokens}"
+                        )
                     elif n_go_tokens > 0:
                         # Ensure GO embeddings have the same dtype as text embeddings
                         go_embeds_flat = go_embeds_flat.to(dtype=text_embeddings.dtype, device=text_embeddings.device)
-                        
+
                         print(f"🧬 Before GO replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
                         text_embeddings[go_mask] = go_embeds_flat
                         print(f"🧬 After GO replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
                         print(f"🧬 GO aspects successfully integrated into text embeddings!")
-           
-            
+
             # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as ProteinLLMModel.generate)
-            
 
             from copy import deepcopy
 
             base_sampling_params = kwargs.get("sampling_params", SamplingParams())
-            
+
             all_outputs = []
-            
+
             print(f"🧬 ======= PROMPT EMBEDS ANALYSIS =======")
             print(f"🧬 Input text_embeddings shape: {text_embeddings.shape}")
             print(f"🧬 Input text_embeddings dtype: {text_embeddings.dtype}")
             print(f"🧬 Input text_embeddings device: {text_embeddings.device}")
             print(f"🧬 Input batch_size: {batch_size}")
-            
+
             # EXACT same logic as ProteinLLMModel.generate - handle 3D vs 2D tensors
             if text_embeddings.dim() == 3 and not protein_processor.batch_inference:
                 print(f"🧬 3D tensor detected - processing each batch item separately")
-                
+
                 for batch_idx in range(text_embeddings.shape[0]):
                     single_embeddings = text_embeddings[batch_idx]  # (seq_len, hidden_size)
-    
+
                     print(f"🧬 Generating for batch {batch_idx} with embeddings shape: {single_embeddings.shape}")
                     sampling_params = kwargs.get(
-                        "sampling_params",
-                        SamplingParams(temperature=0.7, top_p=1.0, max_tokens=5120)
+                        "sampling_params", SamplingParams(temperature=0.7, top_p=1.0, max_tokens=5120)
                     )
 
                     sparams = deepcopy(base_sampling_params)
 
-                    
                     with torch.no_grad():
-                        batch_outputs = llm.generate(
-                            {"prompt_embeds": single_embeddings},
-                            sparams
-                        )
+                        batch_outputs = llm.generate({"prompt_embeds": single_embeddings}, sparams)
                     all_outputs.extend(batch_outputs)
             elif text_embeddings.dim() == 3 and protein_processor.batch_inference:
                 print(f"🧬 3D tensor detected - processing batch inference")
-                #make it a list of length batch_size
+                # make it a list of length batch_size
                 sparams = deepcopy(base_sampling_params)
                 text_embeddings = [text_embeddings[i] for i in range(batch_size)]
                 with torch.no_grad():
@@ -1637,35 +1693,36 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                     print(f"   [DEBUG] Converted 3D tensor to a list of {len(padded_embeddings_list)} padded tensors.")
 
                     print("🧬 Trimming each tensor in the list...")
-                    
+
                     # 2. Create a NEW list to hold the correctly-sized, trimmed tensors.
                     trimmed_embeddings_list = []
-                    
+
                     # 3. Loop through each PADDED tensor in the list.
                     for i in range(batch_size):
                         # 4. Get the true, un-padded length from the attention_mask for this item.
                         actual_length = attention_mask[i].sum().item()
-                        
+
                         # 5. Get the padded tensor from the list.
                         padded_tensor = padded_embeddings_list[i]
-                        
+
                         # 6. Slice THIS 2D TENSOR to its actual length.
                         trimmed_tensor = padded_tensor[:actual_length]
-                        
+
                         # 7. Add the trimmed tensor to our new list.
                         trimmed_embeddings_list.append(trimmed_tensor)
 
-                        print(f"   [Batch {i}] Padded shape: {padded_tensor.shape}, Trimmed shape: {trimmed_tensor.shape}")
+                        print(
+                            f"   [Batch {i}] Padded shape: {padded_tensor.shape}, Trimmed shape: {trimmed_tensor.shape}"
+                        )
                     with torch.no_grad():
-                        print("*"*20)
+                        print("*" * 20)
                         print(f"sparams: {sparams}")
-                        
+
                         # 4. Pass the list of *trimmed* embedding tensors to vLLM
                         all_outputs = llm.generate(
-                            [{"prompt_embeds": emb} for emb in trimmed_embeddings_list],
-                            sparams
+                            [{"prompt_embeds": emb} for emb in trimmed_embeddings_list], sparams
                         )
-                    print("*"*20)
+                    print("*" * 20)
                     print(f"sparams: {sparams}")
                     # for i in range(batch_size):
                     #     print(f"text_embeddings[{i}]: {text_embeddings[i].shape}")
@@ -1675,7 +1732,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                     #         f.write(f"text_embeddings[{i}]: {text_embeddings[i].shape}\n")
                     #         f.write(f"text_embeddings[{i}]: {text_embeddings[i]}\n")
                     #         f.write("\n")
-                    
+
                     # all_outputs = llm.generate(
                     #     [{"prompt_embeds": text_embeddings[i]} for i in range(batch_size)],
                     #     sparams
@@ -1684,10 +1741,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                 # Single item format
                 print(f"🧬 2D tensor detected - single item format")
                 with torch.no_grad():
-                    all_outputs = llm.generate(
-                        {"prompt_embeds": text_embeddings},
-                        sampling_params
-                    )
+                    all_outputs = llm.generate({"prompt_embeds": text_embeddings}, sampling_params)
             else:
                 raise ValueError(f"Unexpected embedding dimensions: {text_embeddings.dim()}D")
             torch.cuda.empty_cache()
@@ -1698,18 +1752,19 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             prompts = []
             for batch_idx in range(input_ids.shape[0]):
                 # Find non-padding tokens
-                non_pad = (input_ids[batch_idx] != protein_processor.text_tokenizer.pad_token_id).nonzero(as_tuple=True)[0]
+                non_pad = (input_ids[batch_idx] != protein_processor.text_tokenizer.pad_token_id).nonzero(
+                    as_tuple=True
+                )[0]
                 if len(non_pad) > 0:
                     start_idx = non_pad[0].item()
                     # Decode to get the prompt text
                     prompt_text = protein_processor.text_tokenizer.decode(
-                        input_ids[batch_idx, start_idx:], 
-                        skip_special_tokens=False
+                        input_ids[batch_idx, start_idx:], skip_special_tokens=False
                     ).strip()
                     prompts.append(prompt_text)
                 else:
                     prompts.append("")  # Handle empty case
-            
+
             sampling_params = kwargs.get("sampling_params", SamplingParams())
             print(f"🧬 Text-only generation for {len(prompts)} prompts")
             return llm.generate(prompts, sampling_params)
@@ -1724,80 +1779,79 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
 def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
     """Generate using standard vLLM with DNA embeddings - EXACTLY matches test_kegg_checkpoint.py logic."""
     print(f"🧬 generate_with_dna_embeddings called with kwargs keys: {kwargs.keys()}")
-    
+
     if "inputs" in kwargs:
         # DNA+text inputs format
         inputs = kwargs["inputs"]
         print(f"🧬 Processing {len(inputs)} input samples")
-        
+
         # STEP 1: Extract text and DNA sequences from inputs (EXACTLY like test_kegg_checkpoint.py)
         batch_text = []
         batch_dna_sequences = []
-        
+
         for inp in inputs:
             text = inp["text"]
             dna_sequences = inp.get("dna_sequences", [])
-            
+
             batch_text.append(text)
             batch_dna_sequences.append(dna_sequences)
-        
+
         print(f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_dna_sequences)} DNA sequence lists")
         for i, dna_seqs in enumerate(batch_dna_sequences):
             print(f"🧬 Sample {i}: has {len(dna_seqs)} DNA sequences")
-        
+
         # STEP 2: Process using DLProcessor (EXACTLY like test_kegg_checkpoint.py and DNALLMModel)
         # This is the key - the processor expects text as first arg, batch_dna_sequences as kwarg
         print(f"🧬 Calling DLProcessor with text and batch_dna_sequences...")
         print(f"🧬 Text sample: {batch_text[0][:200]}..." if batch_text[0] else "🧬 Empty text")
-        
+
         processed = dna_processor.processor(
             text=batch_text,
             batch_dna_sequences=batch_dna_sequences,
             max_length_text=2048,  # Match test_kegg_checkpoint.py
             max_length_dna=2048,
-            return_tensors="pt"
+            return_tensors="pt",
         )
-        
+
         # Get input_ids and attention_mask
         input_ids = processed["input_ids"].to(device)
         attention_mask = processed["attention_mask"].to(device)
-        
+
         print(f"🧬 Input IDs shape: {input_ids.shape}")
         print(f"🧬 Attention mask shape: {attention_mask.shape}")
-        
+
         # Check if we have DNA data
         dna_tokenized = processed.get("dna_tokenized")
         batch_idx_map = processed.get("batch_idx_map")
-        
+
         if dna_tokenized is not None and len(dna_tokenized.input_ids) > 0:
             print(f"🧬 ✅ DNA data provided - processing DNA embeddings...")
             print(f"🧬 DNA tokenized input_ids shape: {dna_tokenized.input_ids.shape}")
             print(f"🧬 Batch idx map: {batch_idx_map}")
-            
+
             batch_size = input_ids.shape[0]
-            
+
             # STEP 3: Process DNA embeddings using EXACT same logic as DNALLMModel.generate
             dna_embeddings = dna_processor.process_dna_embeddings(
-                {
-                    "input_ids": dna_tokenized.input_ids,
-                    "attention_mask": dna_tokenized.attention_mask
-                },
+                {"input_ids": dna_tokenized.input_ids, "attention_mask": dna_tokenized.attention_mask},
                 batch_idx_map,
-                batch_size
+                batch_size,
             )
-            
+
             # STEP 4: Get text embeddings (EXACT same as DNALLMModel.generate)
             print(f"🧬 About to call get_text_embeddings with input_ids shape: {input_ids.shape}")
-            print(f"🧬 Embedding layer status: {hasattr(dna_processor, '_embedding_layer')} / {getattr(dna_processor, '_embedding_layer', None)}")
+            print(
+                f"🧬 Embedding layer status: {hasattr(dna_processor, '_embedding_layer')} / {getattr(dna_processor, '_embedding_layer', None)}"
+            )
             text_embeddings = dna_processor.get_text_embeddings(input_ids)
             print(f"🧬 Text embeddings shape: {text_embeddings.shape}")
-            
+
             # STEP 5: Integrate DNA embeddings (EXACT same logic as DNALLMModel.generate)
             mask = input_ids == dna_processor.dna_token_id
             n_dna_tokens = mask.sum().item()
             dna_embeds_flat = torch.cat(dna_embeddings, dim=0)
             n_dna_features = dna_embeds_flat.shape[0]
-            
+
             print(f"🧬 Found {n_dna_tokens} DNA tokens in text")
             print(f"🧬 Generated {n_dna_features} DNA features")
 
@@ -1808,18 +1862,18 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
 
             # Ensure DNA embeddings have the same dtype as the text embeddings
             dna_embeds_flat = dna_embeds_flat.to(dtype=text_embeddings.dtype, device=text_embeddings.device)
-            
+
             print(f"🧬 Before DNA replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             text_embeddings[mask] = dna_embeds_flat
             print(f"🧬 After DNA replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             print(f"🧬 DNA successfully integrated into text embeddings!")
-            
+
             # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as DNALLMModel.generate)
             from copy import deepcopy
 
             base_sampling_params = kwargs.get("sampling_params", SamplingParams())
             all_outputs = []
-            
+
             print(f"🧬 ======= PROMPT EMBEDS ANALYSIS =======")
             print(f"🧬 Input text_embeddings shape: {text_embeddings.shape}")
             print(f"🧬 Input text_embeddings dtype: {text_embeddings.dtype}")
@@ -1827,30 +1881,24 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
             print(f"🧬 Input batch_size: {batch_size}")
 
             print(f"🧬 text_embeddings: {text_embeddings}")
-            
+
             # EXACT same logic as DNALLMModel.generate - handle 3D vs 2D tensors
             if text_embeddings.dim() == 3:
                 print(f"🧬 3D tensor detected - processing each batch item separately")
-                
+
                 for batch_idx in range(text_embeddings.shape[0]):
                     single_embeddings = text_embeddings[batch_idx]  # (seq_len, hidden_size)
                     print(f"🧬 Generating for batch {batch_idx} with embeddings shape: {single_embeddings.shape}")
                     sparams = deepcopy(base_sampling_params)
                     print(f"🧬 sparams: {sparams}")
                     with torch.no_grad():
-                        batch_outputs = llm.generate(
-                            {"prompt_embeds": single_embeddings},
-                            sparams
-                        )
+                        batch_outputs = llm.generate({"prompt_embeds": single_embeddings}, sparams)
                     all_outputs.extend(batch_outputs)
             elif text_embeddings.dim() == 2:
                 # Single item format
                 print(f"🧬 2D tensor detected - single item format")
                 with torch.no_grad():
-                    all_outputs = llm.generate(
-                        {"prompt_embeds": text_embeddings},
-                        sampling_params
-                    )
+                    all_outputs = llm.generate({"prompt_embeds": text_embeddings}, sampling_params)
             else:
                 raise ValueError(f"Unexpected embedding dimensions: {text_embeddings.dim()}D")
             torch.cuda.empty_cache()
@@ -1866,13 +1914,12 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
                     start_idx = non_pad[0].item()
                     # Decode to get the prompt text
                     prompt_text = dna_processor.text_tokenizer.decode(
-                        input_ids[batch_idx, start_idx:], 
-                        skip_special_tokens=False
+                        input_ids[batch_idx, start_idx:], skip_special_tokens=False
                     ).strip()
                     prompts.append(prompt_text)
                 else:
                     prompts.append("")  # Handle empty case
-            
+
             sampling_params = kwargs.get("sampling_params", SamplingParams())
             print(f"🧬 Text-only generation for {len(prompts)} prompts")
             return llm.generate(prompts, sampling_params)
@@ -1888,37 +1935,39 @@ def main(script_args: ScriptArguments):
     """Main function to start the vLLM serve with DNA support."""
     # Check that we're running in the correct environment
     import sys
-    
+
     def check_environment():
         """Verify we're running in the fuckvllm environment."""
         current_env = None
-        
+
         # Check conda environment
-        conda_env = os.environ.get('CONDA_DEFAULT_ENV')
+        conda_env = os.environ.get("CONDA_DEFAULT_ENV")
         if conda_env:
             current_env = conda_env
             print(f"🌍 Running in conda environment: {conda_env}")
-        
+
         # Check virtual environment
-        virtual_env = os.environ.get('VIRTUAL_ENV')
+        virtual_env = os.environ.get("VIRTUAL_ENV")
         if virtual_env:
             env_name = os.path.basename(virtual_env)
             current_env = env_name
             print(f"🌍 Running in virtual environment: {env_name}")
-        
+
         # Check if we're in the expected environment
-        if current_env != 'fuckvllm':
-            print(f"⚠️  WARNING: Expected to run in 'fuckvllm' environment, but currently in: {current_env or 'unknown'}")
+        if current_env != "fuckvllm":
+            print(
+                f"⚠️  WARNING: Expected to run in 'fuckvllm' environment, but currently in: {current_env or 'unknown'}"
+            )
             print(f"⚠️  Python executable: {sys.executable}")
             print(f"⚠️  Consider activating the fuckvllm environment first:")
             print(f"     conda activate fuckvllm")
             print(f"     # or")
             print(f"     source fuckvllm/bin/activate")
-            
+
             # Give user a chance to abort
             try:
                 response = input("Continue anyway? (y/N): ").strip().lower()
-                if response not in ['y', 'yes']:
+                if response not in ["y", "yes"]:
                     print("❌ Aborting. Please activate the fuckvllm environment first.")
                     sys.exit(1)
             except (KeyboardInterrupt, EOFError):
@@ -1926,13 +1975,13 @@ def main(script_args: ScriptArguments):
                 sys.exit(1)
         else:
             print(f"✅ Running in correct environment: {current_env}")
-    
+
     # Validate environment (unless skipped)
     if not script_args.skip_env_check:
         check_environment()
     else:
         print("⚠️  Environment check skipped via --skip_env_check flag")
-    
+
     # Check required dependencies
     if not is_fastapi_available():
         raise ImportError("FastAPI is required. Install with: pip install fastapi")
@@ -1945,12 +1994,13 @@ def main(script_args: ScriptArguments):
 
     # CRITICAL: Set multiprocessing start method BEFORE any CUDA operations
     import multiprocessing
+
     will_use_protein_processing = script_args.use_protein_llm and script_args.protein_model_name
-    
+
     if will_use_protein_processing:
         # When using CUDA in main process (for protein processing), we need spawn method
         try:
-            multiprocessing.set_start_method('spawn', force=True)
+            multiprocessing.set_start_method("spawn", force=True)
             print("🔧 Set multiprocessing start method to 'spawn' for CUDA compatibility")
         except RuntimeError:
             print("⚠️ Multiprocessing start method already set")
@@ -2001,7 +2051,7 @@ def main(script_args: ScriptArguments):
             "protein_processing_enabled": script_args.use_protein_llm and script_args.protein_model_name,
             "protein_model": script_args.protein_model_name if script_args.protein_model_name else None,
             "text_model": script_args.model,
-            "evo2_available": EVO2_AVAILABLE
+            "evo2_available": EVO2_AVAILABLE,
         }
 
     @app.get("/get_world_size/")
@@ -2011,10 +2061,14 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: List[str]  # Text prompts (will be formatted as chat messages if needed)
-        dna_sequences: Optional[List[List[str]]] = None  # List of DNA sequences per prompt (outer list length must match prompts)
-        protein_sequences: Optional[List[List[str]]] = None  # List of protein sequences per prompt (outer list length must match prompts)
+        dna_sequences: Optional[List[List[str]]] = (
+            None  # List of DNA sequences per prompt (outer list length must match prompts)
+        )
+        protein_sequences: Optional[List[List[str]]] = (
+            None  # List of protein sequences per prompt (outer list length must match prompts)
+        )
         batch_idx_map: Optional[List[List[int]]] = None  # Mapping of batch indices for protein sequences
-        structure_coords: Optional[List[Optional[Any]]] = None   # Structure coordinates for protein sequences
+        structure_coords: Optional[List[Optional[Any]]] = None  # Structure coordinates for protein sequences
         go_aspects: Optional[List[Optional[str]]] = None  # Gene Ontology aspects for protein sequences
         n: int = 1
         repetition_penalty: float = 1.0
@@ -2025,11 +2079,13 @@ def main(script_args: ScriptArguments):
         max_tokens: int = 5120
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: Dict[str, Any] = Field(default_factory=dict)
-        
+
         def model_post_init(self, __context) -> None:
             def _check_len(name, val):
                 if val is not None and len(val) != len(self.prompts):
-                    raise ValueError(f"Length of {name} ({len(val)}) must equal length of prompts ({len(self.prompts)})")
+                    raise ValueError(
+                        f"Length of {name} ({len(val)}) must equal length of prompts ({len(self.prompts)})"
+                    )
 
             _check_len("dna_sequences", self.dna_sequences)
             _check_len("protein_sequences", self.protein_sequences)
@@ -2047,10 +2103,8 @@ def main(script_args: ScriptArguments):
                 # Validate that each dna_sequences item is a list
                 for i, dna_seqs in enumerate(self.dna_sequences):
                     if not isinstance(dna_seqs, list):
-                        raise ValueError(
-                            f"dna_sequences[{i}] must be a list of strings, got {type(dna_seqs)}"
-                        )
-            
+                        raise ValueError(f"dna_sequences[{i}] must be a list of strings, got {type(dna_seqs)}")
+
             if self.protein_sequences is not None:
                 if len(self.protein_sequences) != len(self.prompts):
                     raise ValueError(
@@ -2060,14 +2114,12 @@ def main(script_args: ScriptArguments):
                 # Validate that each protein_sequences item is a list
                 for i, protein_seqs in enumerate(self.protein_sequences):
                     if not isinstance(protein_seqs, list):
-                        raise ValueError(
-                            f"protein_sequences[{i}] must be a list of strings, got {type(protein_seqs)}"
-                        )
-            
+                        raise ValueError(f"protein_sequences[{i}] must be a list of strings, got {type(protein_seqs)}")
+
             # Ensure only one type of biological sequence is provided
             if self.dna_sequences is not None and self.protein_sequences is not None:
                 raise ValueError("Cannot provide both dna_sequences and protein_sequences in the same request")
-            
+
             if self.dna_sequences is not None:
                 for i, seqs in enumerate(self.dna_sequences):
                     if not isinstance(seqs, list) or any(not isinstance(s, str) for s in seqs):
@@ -2095,8 +2147,9 @@ def main(script_args: ScriptArguments):
     async def generate(request: GenerateRequest):
         """Generate completions for the provided prompts, with optional DNA or protein sequences."""
         import time
+
         start_time = time.time()
-        
+
         print(f"🧬 API received request:")
         print(f"🧬   - {len(request.prompts)} prompts")
         print(f"🧬   - DNA sequences: {'Yes' if request.dna_sequences else 'No'}")
@@ -2112,7 +2165,7 @@ def main(script_args: ScriptArguments):
         print(f"🧬   - GO aspects: {'Yes' if request.go_aspects else 'No'}")
         print(f"🧬   - Temperature: {request.temperature}")
         print(f"🧬   - Max tokens: {request.max_tokens}")
-        
+
         # Check if we're using DNA processing
         if request.dna_sequences and script_args.use_dna_llm and script_args.dna_model_name:
             print(f"🧬 Using DNA processing mode")
@@ -2124,24 +2177,24 @@ def main(script_args: ScriptArguments):
         else:
             print(f"🧬 Using standard vLLM mode")
             result = await generate_with_vllm(request)
-        
+
         # Calculate timing metrics
         end_time = time.time()
         generation_time = end_time - start_time
         total_tokens = sum(len(tokens) for tokens in result["completion_ids"])
         tokens_per_second = total_tokens / generation_time if generation_time > 0 else 0
-        
+
         # Log speed metrics
         print(f"🚀 Generation completed:")
         print(f"🚀   - Total time: {generation_time:.3f}s")
         print(f"🚀   - Total tokens: {total_tokens}")
         print(f"🚀   - Speed: {tokens_per_second:.2f} tokens/sec")
-        
+
         # Add metrics to response
         result["generation_time"] = generation_time
         result["tokens_per_second"] = tokens_per_second
         result["total_tokens"] = total_tokens
-        
+
         return result
 
     # ----------------------------------------------------------------------
@@ -2158,12 +2211,12 @@ def main(script_args: ScriptArguments):
         """
         # Build SamplingParams for vLLM
         generation_kwargs = {
-            "temperature":          request.temperature,
-            "top_p":                request.top_p,
-            "top_k":                request.top_k,
-            "min_p":                request.min_p,
-            "max_tokens":           request.max_tokens,
-            "repetition_penalty":   request.repetition_penalty,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "top_k": request.top_k,
+            "min_p": request.min_p,
+            "max_tokens": request.max_tokens,
+            "repetition_penalty": request.repetition_penalty,
         }
         if request.guided_decoding_regex:
             generation_kwargs["guided_decoding"] = GuidedDecodingParams(
@@ -2174,15 +2227,17 @@ def main(script_args: ScriptArguments):
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Split prompts (and DNA) evenly across DP ranks
-        chunked_prompts     = chunk_list(request.prompts,       script_args.data_parallel_size)
-        chunked_dna_seqs    = chunk_list(request.dna_sequences, script_args.data_parallel_size) \
-                                if request.dna_sequences else [[] for _ in range(script_args.data_parallel_size)]
+        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        chunked_dna_seqs = (
+            chunk_list(request.dna_sequences, script_args.data_parallel_size)
+            if request.dna_sequences
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
 
         # ------------------------------------------------------------------
         # Dispatch to workers
         # ------------------------------------------------------------------
         for conn, prompts_this_rank, dna_this_rank in zip(connections, chunked_prompts, chunked_dna_seqs):
-
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
                 print(f"🧬 No real work for this rank, sending placeholder")
@@ -2199,13 +2254,13 @@ def main(script_args: ScriptArguments):
                 if prompt is None:
                     print(f"⚠️ Warning: prompt at index {i} is None, using empty string")
                     prompt = ""
-                
+
                 # Get DNA sequences for this prompt (ensure it's a list of strings)
                 dna_seqs = dna_this_rank[i] if i < len(dna_this_rank) else []
                 if not isinstance(dna_seqs, list):
                     print(f"⚠️ Warning: dna_seqs at index {i} is not a list: {type(dna_seqs)}, converting to []")
                     dna_seqs = []
-                
+
                 # Format the prompt properly for the DLProcessor using the chat template
                 # Use the text tokenizer's chat template to format the conversation
                 formatted_text = prompt
@@ -2217,8 +2272,8 @@ def main(script_args: ScriptArguments):
                         msg = {
                             "role": "user",
                             "content": (
-                                [{"type": "dna"} for _ in dna_seqs]      # one stub per sequence
-                                + [{"type": "text", "text": prompt}]     # the human question
+                                [{"type": "dna"} for _ in dna_seqs]  # one stub per sequence
+                                + [{"type": "text", "text": prompt}]  # the human question
                             ),
                         }
                         # Use the processor's text tokenizer apply_chat_template method
@@ -2226,36 +2281,32 @@ def main(script_args: ScriptArguments):
                         msg = {
                             "role": "user",
                             "content": (
-                                [{"type": "dna"} for _ in dna_seqs]      # one stub per sequence
-                                + [{"type": "text", "text": prompt}]     # the human question
+                                [{"type": "dna"} for _ in dna_seqs]  # one stub per sequence
+                                + [{"type": "text", "text": prompt}]  # the human question
                             ),
                         }
 
                         formatted_text = tok.apply_chat_template(
                             [msg],
                             tokenize=False,
-                            add_generation_prompt=True,             
+                            add_generation_prompt=True,
                         )
-                        
+
                     except Exception as e:
                         print(f"⚠️ Warning: Failed to apply chat template: {e}")
                         # Fallback to simple format
                         formatted_text = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
-                
-                inputs.append({
-                    "text": formatted_text,
-                    "dna_sequences": dna_seqs
-                })
 
-            
+                inputs.append({"text": formatted_text, "dna_sequences": dna_seqs})
+
             print(f"🧬 inputs: {inputs}")
 
             conn.send(
                 {
-                    "type":   "call",
+                    "type": "call",
                     "method": "generate",
                     "kwargs": {
-                        "inputs":          inputs,          # << minimalistic now
+                        "inputs": inputs,  # << minimalistic now
                         "sampling_params": sampling_params,
                     },
                 }
@@ -2264,26 +2315,20 @@ def main(script_args: ScriptArguments):
         # ------------------------------------------------------------------
         # Gather & flatten results
         # ------------------------------------------------------------------
-        raw_outputs   = [conn.recv() for conn in connections]
-        raw_outputs   = [o for o, p in zip(raw_outputs, chunked_prompts) if p]   # drop placeholder ranks
-        raw_outputs   = list(chain.from_iterable(raw_outputs))
+        raw_outputs = [conn.recv() for conn in connections]
+        raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
+        raw_outputs = list(chain.from_iterable(raw_outputs))
 
-        completion_ids = [
-            list(output.token_ids)
-            for req_out in raw_outputs
-            for output in req_out.outputs
-        ]
-        
-        completions = [
-            output.text
-            for req_out in raw_outputs
-            for output in req_out.outputs
-        ]
-        
+        completion_ids = [list(output.token_ids) for req_out in raw_outputs for output in req_out.outputs]
+
+        completions = [output.text for req_out in raw_outputs for output in req_out.outputs]
+
         # Debug logging for completions
         print(f"🧬 Generated {len(completions)} completions:")
         for i, completion in enumerate(completions):
-            print(f"   Completion {i+1} (length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}")
+            print(
+                f"   Completion {i + 1} (length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}"
+            )
 
         return {"completion_ids": completion_ids, "completions": completions}
 
@@ -2298,12 +2343,12 @@ def main(script_args: ScriptArguments):
         """
         # Build SamplingParams for vLLM
         generation_kwargs = {
-            "temperature":          request.temperature,
-            "top_p":                request.top_p,
-            "top_k":                request.top_k,
-            "min_p":                request.min_p,
-            "max_tokens":           request.max_tokens,
-            "repetition_penalty":   request.repetition_penalty,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "top_k": request.top_k,
+            "min_p": request.min_p,
+            "max_tokens": request.max_tokens,
+            "repetition_penalty": request.repetition_penalty,
         }
         if request.guided_decoding_regex:
             generation_kwargs["guided_decoding"] = GuidedDecodingParams(
@@ -2314,23 +2359,46 @@ def main(script_args: ScriptArguments):
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Split prompts (and protein) evenly across DP ranks
-        chunked_prompts     = chunk_list(request.prompts,       script_args.data_parallel_size)
-        chunked_protein_seqs    = chunk_list(request.protein_sequences, script_args.data_parallel_size) \
-                                if request.protein_sequences else [[] for _ in range(script_args.data_parallel_size)]
-        chunked_batch_idx_map = chunk_list(request.batch_idx_map, script_args.data_parallel_size) \
-                                if request.batch_idx_map else [[] for _ in range(script_args.data_parallel_size)]
-        chunked_structure_coords = chunk_list(request.structure_coords, script_args.data_parallel_size) \
-                                if request.structure_coords else [[] for _ in range(script_args.data_parallel_size)]
-        chunked_go_aspects = chunk_list(request.go_aspects, script_args.data_parallel_size) \
-                                if request.go_aspects else [[] for _ in range(script_args.data_parallel_size)]
+        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        chunked_protein_seqs = (
+            chunk_list(request.protein_sequences, script_args.data_parallel_size)
+            if request.protein_sequences
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
+        chunked_batch_idx_map = (
+            chunk_list(request.batch_idx_map, script_args.data_parallel_size)
+            if request.batch_idx_map
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
+        chunked_structure_coords = (
+            chunk_list(request.structure_coords, script_args.data_parallel_size)
+            if request.structure_coords
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
+        chunked_go_aspects = (
+            chunk_list(request.go_aspects, script_args.data_parallel_size)
+            if request.go_aspects
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
 
         # ------------------------------------------------------------------
         # Dispatch to workers
         # ------------------------------------------------------------------
-        for conn, prompts_this_rank, protein_this_rank, batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank in zip(
-            connections, chunked_prompts, chunked_protein_seqs, chunked_batch_idx_map, chunked_structure_coords, chunked_go_aspects
+        for (
+            conn,
+            prompts_this_rank,
+            protein_this_rank,
+            batch_idx_this_rank,
+            struct_coords_this_rank,
+            go_aspects_this_rank,
+        ) in zip(
+            connections,
+            chunked_prompts,
+            chunked_protein_seqs,
+            chunked_batch_idx_map,
+            chunked_structure_coords,
+            chunked_go_aspects,
         ):
-
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
                 prompts_this_rank, protein_this_rank = ["<placeholder>"], [[]]
@@ -2350,18 +2418,20 @@ def main(script_args: ScriptArguments):
                 if prompt is None:
                     print(f"⚠️ Warning: prompt at index {i} is None, using empty string")
                     prompt = ""
-                
+
                 # Get protein sequences for this prompt (ensure it's a list of strings)
                 protein_seqs = protein_this_rank[i] if i < len(protein_this_rank) else []
                 if not isinstance(protein_seqs, list):
-                    print(f"⚠️ Warning: protein_seqs at index {i} is not a list: {type(protein_seqs)}, converting to []")
+                    print(
+                        f"⚠️ Warning: protein_seqs at index {i} is not a list: {type(protein_seqs)}, converting to []"
+                    )
                     protein_seqs = []
-                
+
                 # Get additional parameters for this prompt
                 batch_idx = batch_idx_this_rank[i] if i < len(batch_idx_this_rank) else []
                 struct_coords = struct_coords_this_rank[i] if i < len(struct_coords_this_rank) else None
                 go_aspect = go_aspects_this_rank[i] if i < len(go_aspects_this_rank) else None
-                
+
                 # Format the prompt properly for the PLProcessor using the chat template
                 # Use the text tokenizer's chat template to format the conversation
                 formatted_text = prompt
@@ -2369,12 +2439,11 @@ def main(script_args: ScriptArguments):
                     # If not already formatted, format as a chat conversation
                     messages = [{"role": "user", "content": prompt}]
                     try:
-                        
                         msg = {
                             "role": "user",
                             "content": (
-                                [{"type": "protein"} for _ in protein_seqs]      # one stub per sequence
-                                + [{"type": "text", "text": prompt}]     # the human question
+                                [{"type": "protein"} for _ in protein_seqs]  # one stub per sequence
+                                + [{"type": "text", "text": prompt}]  # the human question
                             ),
                         }
                         tok = get_main_text_tokenizer(script_args.model)
@@ -2382,30 +2451,31 @@ def main(script_args: ScriptArguments):
                         formatted_text = tok.apply_chat_template(
                             [msg],
                             tokenize=False,
-                            add_generation_prompt=True,             
+                            add_generation_prompt=True,
                         )
                     except Exception as e:
                         print(f"⚠️ Warning: Failed to apply chat template: {e}")
                         # Fallback to simple format
                         formatted_text = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
-                
-                inputs.append({
-                    "text": formatted_text,
-                    "protein_sequences": protein_seqs,
-                    "batch_idx_map": batch_idx,
-                    "structure_coords": struct_coords,
-                    "go_aspects": go_aspect
-                })
 
-            
+                inputs.append(
+                    {
+                        "text": formatted_text,
+                        "protein_sequences": protein_seqs,
+                        "batch_idx_map": batch_idx,
+                        "structure_coords": struct_coords,
+                        "go_aspects": go_aspect,
+                    }
+                )
+
             print(f"🧬 inputs: {inputs}")
 
             conn.send(
                 {
-                    "type":   "call",
+                    "type": "call",
                     "method": "generate",
                     "kwargs": {
-                        "inputs":          inputs,          # << minimalistic now
+                        "inputs": inputs,  # << minimalistic now
                         "sampling_params": sampling_params,
                     },
                 }
@@ -2414,26 +2484,20 @@ def main(script_args: ScriptArguments):
         # ------------------------------------------------------------------
         # Gather & flatten results
         # ------------------------------------------------------------------
-        raw_outputs   = [conn.recv() for conn in connections]
-        raw_outputs   = [o for o, p in zip(raw_outputs, chunked_prompts) if p]   # drop placeholder ranks
-        raw_outputs   = list(chain.from_iterable(raw_outputs))
+        raw_outputs = [conn.recv() for conn in connections]
+        raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
+        raw_outputs = list(chain.from_iterable(raw_outputs))
 
-        completion_ids = [
-            list(output.token_ids)
-            for req_out in raw_outputs
-            for output in req_out.outputs
-        ]
-        
-        completions = [
-            output.text
-            for req_out in raw_outputs
-            for output in req_out.outputs
-        ]
-        
+        completion_ids = [list(output.token_ids) for req_out in raw_outputs for output in req_out.outputs]
+
+        completions = [output.text for req_out in raw_outputs for output in req_out.outputs]
+
         # Debug logging for completions
         print(f"🧬 Generated {len(completions)} completions:")
         for i, completion in enumerate(completions):
-            print(f"   Completion {i+1} (length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}")
+            print(
+                f"   Completion {i + 1} (length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}"
+            )
 
         return {"completion_ids": completion_ids, "completions": completions}
 
@@ -2528,6 +2592,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateEmbedsRequest(BaseModel):
         """Request model for direct prompt embeddings generation."""
+
         prompt_embeds: List[List[List[float]]]  # List of (seq_len x hidden_size) embeddings per sample
         temperature: float = 1.0
         top_p: float = 1.0
@@ -2548,6 +2613,7 @@ def main(script_args: ScriptArguments):
     async def generate_embeds(request: GenerateEmbedsRequest):
         """Generate completions given *pre-computed* prompt embeddings."""
         import time
+
         start_time = time.time()
 
         # Build SamplingParams
