@@ -31,7 +31,7 @@ unset SLURM_TRES_PER_TASK
 
 # ---------- Shared storage ----------
 SCRATCH_BASE="/large_storage/goodarzilab/bioreason"
-SCRATCH_JOB="/home/$USER/trl/vllm_eval_esm3-qwen-4B-finetune-mixed-Qwen3-4B-Thinking-2507-split_go_aspects_4b_2507_lr1e-4_32gpus-stage2"
+SCRATCH_JOB="/home/$USER/trl/vllm_eval_v6_stage2"
 
 # Per-replica index/ports/paths
 IDX="${SLURM_ARRAY_TASK_ID}"
