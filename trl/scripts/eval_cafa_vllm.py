@@ -201,10 +201,10 @@ if __name__ == "__main__":
 
     # Dataset options (aligned with training)
     p.add_argument("--cafa5_dataset", type=str, default="wanglab/cafa5")
-    p.add_argument("--cafa5_dataset_name", type=str, default="cafa5_reasoning")
+    p.add_argument("--cafa5_dataset_name", type=str, default="experiment_data")
     p.add_argument("--cafa5_dataset_subset", type=str, default=None)
     p.add_argument("--dataset_cache_dir", type=str, default="/large_storage/goodarzilab/bioreason/data/")
-    p.add_argument("--structure_dir", type=str, default="/large_storage/goodarzilab/bioreason/data/sequences/")
+    p.add_argument("--structure_dir", type=str, default="/large_storage/goodarzilab/bioreason/data/structures/")
     p.add_argument("--include_go_defs", type=str2bool, default=False)
     p.add_argument("--interpro_dataset_name", type=str, default="interpro_metadata")
     p.add_argument("--split_go_aspects", type=str2bool, default=True)
@@ -222,7 +222,7 @@ if __name__ == "__main__":
 
     # Eval controls
     p.add_argument("--max_samples", type=int, default=128)
-    p.add_argument("--max_length_protein", type=int, default=500)
+    p.add_argument("--max_length_protein", type=int, default=2000)
     p.add_argument("--request_batch_size", type=int, default=16)
     p.add_argument("--concurrent_requests", type=int, default=8)
 
