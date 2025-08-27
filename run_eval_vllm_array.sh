@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=serve_protein_qwen_vllm_replicas
 #SBATCH --partition=vector_gpu_priority
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1                 # 1 node per array task
-#SBATCH --gpus=4                  # tensor parallel size = 4 per node
-#SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=24
-#SBATCH --mem=512gb
+#SBATCH --gpus=2                  # tensor parallel size = 4 per node
+#SBATCH --ntasks-per-node=2
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=256gb
 #SBATCH --output=serve_%A_%a.out
 #SBATCH --error=serve_%A_%a.err
 # #SBATCH --array=0-2               # <-- 3 replicas (use 0-1 for two replicas)
@@ -31,7 +31,7 @@ unset SLURM_TRES_PER_TASK
 
 # ---------- Shared storage ----------
 SCRATCH_BASE="/large_storage/goodarzilab/bioreason"
-SCRATCH_JOB="/home/$USER/trl/vllm_eval_v6_stage2"
+SCRATCH_JOB="/home/$USER/trl/vllm_eval_v6_stage2_aug27"
 
 # Per-replica index/ports/paths
 IDX="${SLURM_ARRAY_TASK_ID}"

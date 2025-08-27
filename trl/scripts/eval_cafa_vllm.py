@@ -5,9 +5,14 @@ Async CAFA‑5 inference against a single vLLM server
 - Streams to http://HOST:PORT/generate/
 """
 
-import argparse, asyncio, time, json, aiohttp
-from typing import Any
+import argparse
+import asyncio
+import json
 import os
+import time
+from typing import Any
+
+import aiohttp
 import numpy as np
 from bioreason2.dataset.cafa5.collate import _coords_from_cif, _coords_from_pdb
 from bioreason2.dataset.cafa5.load import load_cafa5_dataset
@@ -18,9 +23,10 @@ def add_structures_to_dataset(dataset, max_length_protein: int = 2048, num_proc:
     """
     Add structure coordinates to dataset using the same logic as collate function.
     """
+
     def process_structure(example):
         struct_path = example.get("structure_path")
-        
+
         # Same logic as collate function lines 122-142
         if struct_path is not None and os.path.exists(struct_path):
             try:
@@ -35,31 +41,28 @@ def add_structures_to_dataset(dataset, max_length_protein: int = 2048, num_proc:
                 coords = np.full((0, 3, 3), np.nan)
         else:
             coords = np.full((0, 3, 3), np.nan)
-        
+
         # Truncate if number of residues exceeds max_length_protein
         if coords.shape[0] > max_length_protein:
             coords = coords[:max_length_protein]
-        
+
         # For empty coordinates, return None (helps schema alignment across shards)
         example["structure_coords"] = None if coords.shape[0] == 0 else coords.tolist()
-        
+
         # Fix sequence field name consistency
         if "sequence" in example and "protein_sequences" not in example:
             example["protein_sequences"] = [example["sequence"]]
-            
+
         return example
-    
+
     print(f"Adding structure coordinates to {len(dataset)} samples using {num_proc} processes...")
     print(f"Expected processing time: ~{len(dataset) / (num_proc * 80):.1f} minutes (estimated)")
-    return dataset.map(
-        process_structure,
-        num_proc=num_proc,
-        desc="Adding structures"
-    )
+    return dataset.map(process_structure, num_proc=num_proc, desc="Adding structures")
 
 
 try:
     import orjson  # type: ignore
+
     _dumps = lambda o: orjson.dumps(o).decode()
 except Exception:
     _dumps = lambda o: json.dumps(o)
@@ -123,19 +126,19 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
     Join batch input and output data into individual sample records.
     """
     joined_samples = []
-    
+
     # Get the completions from the batch output
     batch_result = batch_output.get("result", {})
     completion_ids = batch_result.get("completion_ids", [])
     completions = batch_result.get("completions", [])
-    
+
     # Get input data
     protein_ids = batch_input.get("protein_ids", [])
     prompts = batch_input.get("prompts", [])
     protein_sequences = batch_input.get("protein_sequences", [])
     go_aspects = batch_input.get("go_aspects", [])
     structure_coords = batch_input.get("structure_coords", [])
-    
+
     # Process each sample in the batch
     for i in range(len(protein_ids)):
         sample_record = {
@@ -148,29 +151,32 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
             "generated_response": completions[i] if i < len(completions) else "",
             "full_response": completions[i] if i < len(completions) else "",
             "structure_coords": structure_coords[i] if structure_coords and i < len(structure_coords) else None,
-            "structure_loaded": bool(structure_coords and i < len(structure_coords) and structure_coords[i] is not None),
+            "structure_loaded": bool(
+                structure_coords and i < len(structure_coords) and structure_coords[i] is not None
+            ),
             "success": i < len(completions) and bool(completions[i]),
             "completion_id": completion_ids[i] if i < len(completion_ids) else f"batch_{batch_index}_sample_{i}",
         }
-        
+
         # Try to get additional metadata from original samples if available
         try:
             original_sample_idx = batch_index * len(protein_ids) + i
-            if hasattr(samples, '__getitem__') and original_sample_idx < len(samples):
+            if hasattr(samples, "__getitem__") and original_sample_idx < len(samples):
                 original_sample = samples[original_sample_idx]
                 sample_record["ground_truth"] = original_sample.get("ground_truth", "")
                 sample_record["structure_path"] = original_sample.get("structure_path", "")
         except (IndexError, AttributeError):
             sample_record["ground_truth"] = ""
             sample_record["structure_path"] = ""
-        
+
         joined_samples.append(sample_record)
-    
+
     return joined_samples
 
 
-def build_batches(samples, batch_size: int, temperature: float, top_p: float,
-                  max_new_tokens: int, repetition_penalty: float):
+def build_batches(
+    samples, batch_size: int, temperature: float, top_p: float, max_new_tokens: int, repetition_penalty: float
+):
     batches = []
     for i in range(0, len(samples), batch_size):
         end = min(i + batch_size, len(samples))
@@ -256,41 +262,72 @@ async def main(args):
 
         async def worker(payload):
             async with sem:
-                return await _post(sess, f"{server}/generate/", payload, args.client_timeout_sec)
+                try:
+                    result = await _post(sess, f"{server}/generate/", payload, args.client_timeout_sec)
+                    return {"success": True, "result": result, "error": None}
+                except Exception as e:
+                    return {"success": False, "result": None, "error": str(e)}
 
         tasks = [asyncio.create_task(worker(p)) for p in batches]
         done, _ = await asyncio.wait(tasks)
         results = [t.result() for t in done]
 
     dt = time.time() - t0
-    print(f"⏱️  {len(samples)} samples | {dt:.2f}s | {len(samples)/dt:.2f} samples/s")
+    print(f"⏱️  {len(samples)} samples | {dt:.2f}s | {len(samples) / dt:.2f} samples/s")
 
     if args.save_results:
         os.makedirs(args.batch_outputs_dir, exist_ok=True)
         os.makedirs(args.joined_outputs_dir, exist_ok=True)
-        
-        for i, result in enumerate(results):
-            result_out = {
-                "config": vars(args),
-                "batch_index": i,
-                "batch_size": len(batches[i]["protein_ids"]) if i < len(batches) else 0,
-                "time_sec": dt,
-                "result": result,
-            }
-            result_filename = os.path.join(args.batch_outputs_dir, f"batch_{i}_results.json")
-            with open(result_filename, "w") as f:
-                json.dump(result_out, f, indent=4)
-            print(f"💾 Saved batch {i} results → {result_filename}")
-            
-            # Create joined output for this batch
-            if i < len(batches):
+        error_dir = os.path.join(os.path.dirname(args.batch_outputs_dir), "error_logs")
+        os.makedirs(error_dir, exist_ok=True)
+
+        successful_batches = 0
+        failed_batches = 0
+
+        for i, batch_response in enumerate(results):
+            batch_size = len(batches[i]["protein_ids"]) if i < len(batches) else 0
+
+            if batch_response["success"]:
+                # Handle successful batch
+                result_out = {
+                    "config": vars(args),
+                    "batch_index": i,
+                    "batch_size": batch_size,
+                    "time_sec": dt,
+                    "result": batch_response["result"],
+                }
+                result_filename = os.path.join(args.batch_outputs_dir, f"batch_{i}_results.json")
+                with open(result_filename, "w") as f:
+                    json.dump(result_out, f, indent=4)
+                print(f"💾 Saved batch {i} results → {result_filename}")
+
+                # Create joined output for this batch
                 batch_input = batches[i]
                 joined_samples = join_batch_input_output(batch_input, result_out, i, samples)
-                
+
                 joined_filename = os.path.join(args.joined_outputs_dir, f"batch_{i}_joined.json")
                 with open(joined_filename, "w") as f:
                     json.dump(joined_samples, f, indent=4)
                 print(f"🔗 Saved batch {i} joined data → {joined_filename}")
+                successful_batches += 1
+
+            else:
+                # Handle failed batch
+                error_out = {
+                    "config": vars(args),
+                    "batch_index": i,
+                    "batch_size": batch_size,
+                    "time_sec": dt,
+                    "error": batch_response["error"],
+                    "protein_ids": batches[i]["protein_ids"] if i < len(batches) else [],
+                }
+                error_filename = os.path.join(error_dir, f"batch_{i}_error.json")
+                with open(error_filename, "w") as f:
+                    json.dump(error_out, f, indent=4)
+                print(f"❌ Saved batch {i} error → {error_filename}")
+                failed_batches += 1
+
+        print(f"📊 Summary: {successful_batches} successful, {failed_batches} failed batches")
 
 
 if __name__ == "__main__":
@@ -347,5 +384,3 @@ if __name__ == "__main__":
         args.interpro_dataset_name = args.interpro_config
 
     asyncio.run(main(args))
-
-
