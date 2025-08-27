@@ -6,7 +6,7 @@ Async CAFA‑5 inference against a single vLLM server
 """
 
 import argparse, asyncio, time, json, aiohttp
-from typing import List, Dict, Any
+from typing import Any
 import os
 import numpy as np
 from bioreason2.dataset.cafa5.collate import _coords_from_cif, _coords_from_pdb
@@ -65,7 +65,7 @@ except Exception:
     _dumps = lambda o: json.dumps(o)
 
 
-async def _post(session: aiohttp.ClientSession, url: str, payload: Dict[str, Any], timeout_s: int):
+async def _post(session: aiohttp.ClientSession, url: str, payload: dict[str, Any], timeout_s: int):
     async with session.post(url, json=payload, timeout=timeout_s) as resp:
         resp.raise_for_status()
         return await resp.json()
@@ -116,6 +116,57 @@ def _flatten_assistant_messages_to_text(prompt) -> str:
             assistant_texts.append("\n\n")
         return "\n".join(t.strip() for t in assistant_texts if t and t.strip())
     return str(prompt)
+
+
+def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: int, samples) -> list[dict]:
+    """
+    Join batch input and output data into individual sample records.
+    """
+    joined_samples = []
+    
+    # Get the completions from the batch output
+    batch_result = batch_output.get("result", {})
+    completion_ids = batch_result.get("completion_ids", [])
+    completions = batch_result.get("completions", [])
+    
+    # Get input data
+    protein_ids = batch_input.get("protein_ids", [])
+    prompts = batch_input.get("prompts", [])
+    protein_sequences = batch_input.get("protein_sequences", [])
+    go_aspects = batch_input.get("go_aspects", [])
+    structure_coords = batch_input.get("structure_coords", [])
+    
+    # Process each sample in the batch
+    for i in range(len(protein_ids)):
+        sample_record = {
+            "sample_id": i,
+            "batch_index": batch_index,
+            "protein_id": protein_ids[i] if i < len(protein_ids) else f"unknown_{i}",
+            "prompt": prompts[i] if i < len(prompts) else "",
+            "protein_sequences": protein_sequences[i] if i < len(protein_sequences) else [],
+            "go_aspect": go_aspects[i] if go_aspects and i < len(go_aspects) else None,
+            "generated_response": completions[i] if i < len(completions) else "",
+            "full_response": completions[i] if i < len(completions) else "",
+            "structure_coords": structure_coords[i] if structure_coords and i < len(structure_coords) else None,
+            "structure_loaded": bool(structure_coords and i < len(structure_coords) and structure_coords[i] is not None),
+            "success": i < len(completions) and bool(completions[i]),
+            "completion_id": completion_ids[i] if i < len(completion_ids) else f"batch_{batch_index}_sample_{i}",
+        }
+        
+        # Try to get additional metadata from original samples if available
+        try:
+            original_sample_idx = batch_index * len(protein_ids) + i
+            if hasattr(samples, '__getitem__') and original_sample_idx < len(samples):
+                original_sample = samples[original_sample_idx]
+                sample_record["ground_truth"] = original_sample.get("ground_truth", "")
+                sample_record["structure_path"] = original_sample.get("structure_path", "")
+        except (IndexError, AttributeError):
+            sample_record["ground_truth"] = ""
+            sample_record["structure_path"] = ""
+        
+        joined_samples.append(sample_record)
+    
+    return joined_samples
 
 
 def build_batches(samples, batch_size: int, temperature: float, top_p: float,
@@ -191,8 +242,9 @@ async def main(args):
     )
 
     if batches:
+        os.makedirs(args.batch_inputs_dir, exist_ok=True)
         for i, batch in enumerate(batches):
-            batch_filename = args.first_batch_out.replace(".json", f"_{i}.json")
+            batch_filename = os.path.join(args.batch_inputs_dir, f"batch_{i}.json")
             with open(batch_filename, "w") as f:
                 json.dump(batch, f, indent=4)
             print(f"💾 Saved batch {i} payload → {batch_filename}")
@@ -214,15 +266,31 @@ async def main(args):
     print(f"⏱️  {len(samples)} samples | {dt:.2f}s | {len(samples)/dt:.2f} samples/s")
 
     if args.save_results:
-        out = {
-            "config": vars(args),
-            "num_samples": len(samples),
-            "time_sec": dt,
-            "results": results,
-        }
-        with open(args.results_out, "w") as f:
-            json.dump(out, f, indent=4)
-        print(f"💾 Saved results → {args.results_out}")
+        os.makedirs(args.batch_outputs_dir, exist_ok=True)
+        os.makedirs(args.joined_outputs_dir, exist_ok=True)
+        
+        for i, result in enumerate(results):
+            result_out = {
+                "config": vars(args),
+                "batch_index": i,
+                "batch_size": len(batches[i]["protein_ids"]) if i < len(batches) else 0,
+                "time_sec": dt,
+                "result": result,
+            }
+            result_filename = os.path.join(args.batch_outputs_dir, f"batch_{i}_results.json")
+            with open(result_filename, "w") as f:
+                json.dump(result_out, f, indent=4)
+            print(f"💾 Saved batch {i} results → {result_filename}")
+            
+            # Create joined output for this batch
+            if i < len(batches):
+                batch_input = batches[i]
+                joined_samples = join_batch_input_output(batch_input, result_out, i, samples)
+                
+                joined_filename = os.path.join(args.joined_outputs_dir, f"batch_{i}_joined.json")
+                with open(joined_filename, "w") as f:
+                    json.dump(joined_samples, f, indent=4)
+                print(f"🔗 Saved batch {i} joined data → {joined_filename}")
 
 
 if __name__ == "__main__":
@@ -263,8 +331,9 @@ if __name__ == "__main__":
     p.add_argument("--repetition_penalty", type=float, default=1.0)
 
     p.add_argument("--save_results", action="store_true")
-    p.add_argument("--first_batch_out", type=str, default="batches.json")
-    p.add_argument("--results_out", type=str, default="cafa_vllm_results.json")
+    p.add_argument("--batch_inputs_dir", type=str, default="batch_inputs")
+    p.add_argument("--batch_outputs_dir", type=str, default="batch_outputs")
+    p.add_argument("--joined_outputs_dir", type=str, default="joined_outputs")
     p.add_argument("--client_timeout_sec", type=int, default=1800)
 
     args = p.parse_args()

@@ -216,8 +216,9 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --max_new_tokens 6000 \
     --repetition_penalty 1.0 \
     --save_results \
-    --first_batch_out "$REPL_DIR/batches.json" \
-    --results_out "$REPL_DIR/results.json" \
+    --batch_inputs_dir "$REPL_DIR/batch_inputs" \
+    --batch_outputs_dir "$REPL_DIR/batch_outputs" \
+    --joined_outputs_dir "$REPL_DIR/joined_outputs" \
     > "$EVAL_LOG" 2>&1
   set +x
   echo "[Replica $IDX] Eval done. Results: $REPL_DIR"
