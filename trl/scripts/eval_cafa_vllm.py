@@ -135,7 +135,7 @@ async def main(args):
         dataset_subset=args.cafa5_dataset_subset,
         max_length=args.max_length_protein,
         seed=args.seed,
-        val_split_ratio=args.val_split_ratio,
+        # val_split_ratio=args.val_split_ratio,
         return_as_chat_template=True,
         split_go_aspects=args.split_go_aspects,
         structure_dir=args.structure_dir,

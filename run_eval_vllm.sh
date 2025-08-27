@@ -226,12 +226,12 @@ if [ "$RUN_EVAL" = true ]; then
     --interpro_in_prompt True \
     --ppi_in_prompt True \
     --include_protein_function_summary True \
-    --val_split_ratio 0.1 \
+    --val_split_ratio 0.9 \
     --seed 23 \
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
     --max_samples 128 \
-    --request_batch_size 64 \
-    --concurrent_requests 2 \
+    --request_batch_size 32 \
+    --concurrent_requests 4 \
     --debug True \
     --save_results \
     --first_batch_out "$SCRATCH_JOB/batches_0.json" \
