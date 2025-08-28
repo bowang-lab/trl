@@ -391,68 +391,78 @@ async def main(args):
                 except Exception as e:
                     return {"success": False, "result": None, "error": str(e)}
 
-        tasks = [asyncio.create_task(worker(p)) for p in batches]
-        done, _ = await asyncio.wait(tasks)
-        results = [t.result() for t in done]
+        async def worker_with_index(payload, batch_index):
+            result = await worker(payload)
+            return result, batch_index
+
+        tasks = [asyncio.create_task(worker_with_index(p, i)) for i, p in enumerate(batches)]
+        
+        # Process each batch as it completes
+        successful_batches = 0
+        failed_batches = 0
+        
+        if args.save_results:
+            os.makedirs(args.batch_outputs_dir, exist_ok=True)
+            os.makedirs(args.joined_outputs_dir, exist_ok=True)
+            error_dir = os.path.join(os.path.dirname(args.batch_outputs_dir), "error_logs")
+            os.makedirs(error_dir, exist_ok=True)
+
+        for coro in asyncio.as_completed(tasks):
+            batch_response, batch_index = await coro
+            batch_size = len(batches[batch_index]["protein_ids"]) if batch_index < len(batches) else 0
+            
+            if args.save_results:
+                if batch_response["success"]:
+                    # Handle successful batch
+                    result_out = {
+                        "config": vars(args),
+                        "batch_index": batch_index,
+                        "batch_size": batch_size,
+                        "time_sec": time.time() - t0,
+                        "result": batch_response["result"],
+                    }
+                    result_filename = os.path.join(args.batch_outputs_dir, f"batch_{batch_index}_results.json")
+                    with open(result_filename, "w") as f:
+                        json.dump(result_out, f, indent=4)
+                    print(f"💾 Saved batch {batch_index} results → {result_filename}")
+
+                    # Create joined output for this batch
+                    batch_input = batches[batch_index]
+                    joined_samples = join_batch_input_output(batch_input, result_out, batch_index, samples)
+
+                    joined_filename = os.path.join(args.joined_outputs_dir, f"batch_{batch_index}_joined.json")
+                    with open(joined_filename, "w") as f:
+                        json.dump(joined_samples, f, indent=4)
+                    print(f"🔗 Saved batch {batch_index} joined data → {joined_filename}")
+                    successful_batches += 1
+                else:
+                    # Handle failed batch
+                    error_out = {
+                        "config": vars(args),
+                        "batch_index": batch_index,
+                        "batch_size": batch_size,
+                        "time_sec": time.time() - t0,
+                        "error": batch_response["error"],
+                        "protein_ids": batches[batch_index]["protein_ids"] if batch_index < len(batches) else [],
+                    }
+                    error_filename = os.path.join(error_dir, f"batch_{batch_index}_error.json")
+                    with open(error_filename, "w") as f:
+                        json.dump(error_out, f, indent=4)
+                    print(f"❌ Saved batch {batch_index} error → {error_filename}")
+                    failed_batches += 1
+            else:
+                # Count results even if not saving
+                if batch_response["success"]:
+                    successful_batches += 1
+                else:
+                    failed_batches += 1
 
     dt = time.time() - t0
     print(f"⏱️  {len(samples)} samples | {dt:.2f}s | {len(samples) / dt:.2f} samples/s")
 
-    if args.save_results:
-        os.makedirs(args.batch_outputs_dir, exist_ok=True)
-        os.makedirs(args.joined_outputs_dir, exist_ok=True)
-        error_dir = os.path.join(os.path.dirname(args.batch_outputs_dir), "error_logs")
-        os.makedirs(error_dir, exist_ok=True)
-
-        successful_batches = 0
-        failed_batches = 0
-
-        for i, batch_response in enumerate(results):
-            batch_size = len(batches[i]["protein_ids"]) if i < len(batches) else 0
-
-            if batch_response["success"]:
-                # Handle successful batch
-                result_out = {
-                    "config": vars(args),
-                    "batch_index": i,
-                    "batch_size": batch_size,
-                    "time_sec": dt,
-                    "result": batch_response["result"],
-                }
-                result_filename = os.path.join(args.batch_outputs_dir, f"batch_{i}_results.json")
-                with open(result_filename, "w") as f:
-                    json.dump(result_out, f, indent=4)
-                print(f"💾 Saved batch {i} results → {result_filename}")
-
-                # Create joined output for this batch
-                batch_input = batches[i]
-                joined_samples = join_batch_input_output(batch_input, result_out, i, samples)
-
-                joined_filename = os.path.join(args.joined_outputs_dir, f"batch_{i}_joined.json")
-                with open(joined_filename, "w") as f:
-                    json.dump(joined_samples, f, indent=4)
-                print(f"🔗 Saved batch {i} joined data → {joined_filename}")
-                successful_batches += 1
-
-            else:
-                # Handle failed batch
-                error_out = {
-                    "config": vars(args),
-                    "batch_index": i,
-                    "batch_size": batch_size,
-                    "time_sec": dt,
-                    "error": batch_response["error"],
-                    "protein_ids": batches[i]["protein_ids"] if i < len(batches) else [],
-                }
-                error_filename = os.path.join(error_dir, f"batch_{i}_error.json")
-                with open(error_filename, "w") as f:
-                    json.dump(error_out, f, indent=4)
-                print(f"❌ Saved batch {i} error → {error_filename}")
-                failed_batches += 1
-
-        print(
-            f"📊 Final Summary: {successful_batches} successful batches, {failed_batches} failed batches, {len(filtered_errors)} prefiltered proteins"
-        )
+    print(
+        f"📊 Final Summary: {successful_batches} successful batches, {failed_batches} failed batches, {len(filtered_errors)} prefiltered proteins"
+    )
 
 
 if __name__ == "__main__":
