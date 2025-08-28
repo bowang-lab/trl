@@ -118,7 +118,8 @@ def _flatten_assistant_messages_to_text(prompt) -> str:
 
 def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: int, samples) -> list[dict]:
     """
-    Join batch input and output data into individual sample records.
+    Join batch input and output data into individual sample records using direct identifier matching.
+    Uses (protein_id, go_aspect) pairs to match completions to their corresponding input data.
     """
     joined_samples = []
 
@@ -126,48 +127,86 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
     batch_result = batch_output.get("result", {})
     completion_ids = batch_result.get("completion_ids", [])
     completions = batch_result.get("completions", [])
+    output_protein_ids = batch_result.get("protein_ids", [])
+    output_go_aspects = batch_result.get("go_aspects", [])
 
     # Get input data
-    protein_ids = batch_input.get("protein_ids", [])
+    input_protein_ids = batch_input.get("protein_ids", [])
     prompts = batch_input.get("prompts", [])
     assistant_texts = batch_input.get("assistant_texts", [])
     protein_sequences = batch_input.get("protein_sequences", [])
     go_aspects = batch_input.get("go_aspects", [])
     structure_coords = batch_input.get("structure_coords", [])
 
-    # Process each sample in the batch
-    for i in range(len(protein_ids)):
-        sample_record = {
+    # Create lookup dictionaries from input data using (protein_id, go_aspect) as key
+    input_lookup = {}
+    for i in range(len(input_protein_ids)):
+        protein_id = input_protein_ids[i] if i < len(input_protein_ids) else f"unknown_{i}"
+        go_aspect = go_aspects[i] if go_aspects and i < len(go_aspects) else None
+        key = (protein_id, go_aspect)
+        
+        input_lookup[key] = {
             "sample_id": i,
-            "batch_index": batch_index,
-            "protein_id": protein_ids[i] if i < len(protein_ids) else f"unknown_{i}",
+            "protein_id": protein_id,
             "prompt": prompts[i] if i < len(prompts) else "",
             "assistant_texts": assistant_texts[i] if i < len(assistant_texts) else "",
             "protein_sequences": protein_sequences[i] if i < len(protein_sequences) else [],
-            "go_aspect": go_aspects[i] if go_aspects and i < len(go_aspects) else None,
-            "generated_response": completions[i] if i < len(completions) else "",
-            "full_response": completions[i] if i < len(completions) else "",
+            "go_aspect": go_aspect,
             "structure_coords": structure_coords[i] if structure_coords and i < len(structure_coords) else None,
-            "structure_loaded": bool(
-                structure_coords and i < len(structure_coords) and structure_coords[i] is not None
-            ),
-            "success": i < len(completions) and bool(completions[i]),
-            "completion_id": completion_ids[i] if i < len(completion_ids) else f"batch_{batch_index}_sample_{i}",
         }
 
-        # Set ground truth from assistant_texts (which is the correct ground truth)
-        sample_record["ground_truth"] = assistant_texts[i] if i < len(assistant_texts) else ""
+    # Match outputs to inputs using identifiers
+    for i in range(len(completions)):
+        output_protein_id = output_protein_ids[i] if i < len(output_protein_ids) else f"unknown_{i}"
+        output_go_aspect = output_go_aspects[i] if i < len(output_go_aspects) else None
+        key = (output_protein_id, output_go_aspect)
+        
+        # Find matching input data
+        input_data = input_lookup.get(key)
+        if input_data is None:
+            print(f"⚠️ Warning: No input data found for protein_id={output_protein_id}, go_aspect={output_go_aspect}")
+            # Create minimal record for unmatched output
+            input_data = {
+                "sample_id": i,
+                "protein_id": output_protein_id,
+                "prompt": "",
+                "assistant_texts": "",
+                "protein_sequences": [],
+                "go_aspect": output_go_aspect,
+                "structure_coords": None,
+            }
+        
+        sample_record = {
+            "sample_id": input_data["sample_id"],
+            "batch_index": batch_index,
+            "protein_id": input_data["protein_id"],
+            "prompt": input_data["prompt"],
+            "assistant_texts": input_data["assistant_texts"],
+            "protein_sequences": input_data["protein_sequences"],
+            "go_aspect": input_data["go_aspect"],
+            "generated_response": completions[i] if i < len(completions) else "",
+            "full_response": completions[i] if i < len(completions) else "",
+            "structure_coords": input_data["structure_coords"],
+            "structure_loaded": bool(input_data["structure_coords"] is not None),
+            "success": bool(completions[i]) if i < len(completions) else False,
+            "completion_id": completion_ids[i] if i < len(completion_ids) else f"batch_{batch_index}_output_{i}",
+            "ground_truth": input_data["assistant_texts"],
+        }
 
         # Try to get additional metadata from original samples if available
         try:
-            original_sample_idx = batch_index * len(protein_ids) + i
+            original_sample_idx = batch_index * len(input_protein_ids) + input_data["sample_id"]
             if hasattr(samples, "__getitem__") and original_sample_idx < len(samples):
                 original_sample = samples[original_sample_idx]
                 sample_record["structure_path"] = original_sample.get("structure_path", "")
+            else:
+                sample_record["structure_path"] = ""
         except (IndexError, AttributeError):
             sample_record["structure_path"] = ""
 
         joined_samples.append(sample_record)
+
+    print(f"🔗 Matched {len(joined_samples)} outputs to inputs using identifiers")
 
     return joined_samples
 
@@ -214,7 +253,7 @@ def build_batches(
         # Only create payload if we have samples in this batch
         if protein_ids:
             payload = {
-                "protein_ids": protein_ids,
+                "protein_ids": protein_ids,  # Now sent to server for tracking
                 "prompts": prompts,
                 "assistant_texts": assistant_texts,
                 "protein_sequences": protein_seqs,

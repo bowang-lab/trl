@@ -1542,7 +1542,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists"
         )
         # for i, protein_seqs in enumerate(batch_protein_sequences):
-            # print(f"🧬 Sample {i}: has {len(protein_seqs)} protein sequences")
+        # print(f"🧬 Sample {i}: has {len(protein_seqs)} protein sequences")
 
         # STEP 2: Process using PLProcessor (EXACTLY like DNA with DLProcessor)
         print(f"🧬 Calling PLProcessor with text and batch_protein_sequences...")
@@ -2061,6 +2061,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: List[str]  # Text prompts (will be formatted as chat messages if needed)
+        protein_ids: Optional[List[str]] = None  # Protein IDs for tracking (length must match prompts)
         dna_sequences: Optional[List[List[str]]] = (
             None  # List of DNA sequences per prompt (outer list length must match prompts)
         )
@@ -2320,10 +2321,8 @@ def main(script_args: ScriptArguments):
         raw_outputs = list(chain.from_iterable(raw_outputs))
 
         # Filter out error responses and only process valid RequestOutput objects
-        valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, 'outputs')]
-        
+        valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, "outputs")]
         completion_ids = [list(output.token_ids) for req_out in valid_outputs for output in req_out.outputs]
-
         completions = [output.text for req_out in valid_outputs for output in req_out.outputs]
 
         # Debug logging for completions
@@ -2363,6 +2362,11 @@ def main(script_args: ScriptArguments):
 
         # Split prompts (and protein) evenly across DP ranks
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        chunked_protein_ids = (
+            chunk_list(request.protein_ids, script_args.data_parallel_size)
+            if request.protein_ids
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
         chunked_protein_seqs = (
             chunk_list(request.protein_sequences, script_args.data_parallel_size)
             if request.protein_sequences
@@ -2390,6 +2394,7 @@ def main(script_args: ScriptArguments):
         for (
             conn,
             prompts_this_rank,
+            protein_ids_this_rank,
             protein_this_rank,
             batch_idx_this_rank,
             struct_coords_this_rank,
@@ -2397,6 +2402,7 @@ def main(script_args: ScriptArguments):
         ) in zip(
             connections,
             chunked_prompts,
+            chunked_protein_ids,
             chunked_protein_seqs,
             chunked_batch_idx_map,
             chunked_structure_coords,
@@ -2405,6 +2411,7 @@ def main(script_args: ScriptArguments):
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
                 prompts_this_rank, protein_this_rank = ["<placeholder>"], [[]]
+                protein_ids_this_rank = ["<placeholder>"]
                 batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank = [], [], []
 
             # ---- build the per-example payload -------------------------------------------------------
@@ -2431,6 +2438,7 @@ def main(script_args: ScriptArguments):
                     protein_seqs = []
 
                 # Get additional parameters for this prompt
+                protein_id = protein_ids_this_rank[i] if i < len(protein_ids_this_rank) else None
                 batch_idx = batch_idx_this_rank[i] if i < len(batch_idx_this_rank) else []
                 struct_coords = struct_coords_this_rank[i] if i < len(struct_coords_this_rank) else None
                 go_aspect = go_aspects_this_rank[i] if i < len(go_aspects_this_rank) else None
@@ -2464,6 +2472,7 @@ def main(script_args: ScriptArguments):
                 inputs.append(
                     {
                         "text": formatted_text,
+                        "protein_id": protein_id,
                         "protein_sequences": protein_seqs,
                         "batch_idx_map": batch_idx,
                         "structure_coords": struct_coords,
@@ -2491,21 +2500,36 @@ def main(script_args: ScriptArguments):
         raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
         raw_outputs = list(chain.from_iterable(raw_outputs))
 
-        # Filter out error responses and only process valid RequestOutput objects
-        valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, 'outputs')]
-        
-        completion_ids = [list(output.token_ids) for req_out in valid_outputs for output in req_out.outputs]
+        # Reconstruct identifiers in original order (same chunking as prompts)
+        flattened_protein_ids = [pid for chunk in chunked_protein_ids for pid in chunk if chunk]
+        flattened_go_aspects = [ga for chunk in chunked_go_aspects for ga in chunk if chunk]
 
+        # Filter out error responses and only process valid RequestOutput objects
+        valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, "outputs")]
+        
+        # Extract completion data
+        completion_ids = [list(output.token_ids) for req_out in valid_outputs for output in req_out.outputs]
         completions = [output.text for req_out in valid_outputs for output in req_out.outputs]
+        
+        # Extract identifiers for each completion (assuming 1 completion per input)
+        protein_ids_out = flattened_protein_ids[:len(completions)]
+        go_aspects_out = flattened_go_aspects[:len(completions)]
 
         # Debug logging for completions
         print(f"🧬 Generated {len(completions)} completions:")
         for i, completion in enumerate(completions):
+            pid = protein_ids_out[i] if i < len(protein_ids_out) else "unknown"
+            ga = go_aspects_out[i] if i < len(go_aspects_out) else "unknown"
             print(
-                f"   Completion {i + 1} (length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}"
+                f"   Completion {i + 1} (protein_id={pid}, go_aspect={ga}, length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}"
             )
 
-        return {"completion_ids": completion_ids, "completions": completions}
+        return {
+            "completion_ids": completion_ids, 
+            "completions": completions,
+            "protein_ids": protein_ids_out,
+            "go_aspects": go_aspects_out
+        }
 
     async def generate_with_vllm(request: GenerateRequest):
         """Generate using standard vLLM (original logic)."""
