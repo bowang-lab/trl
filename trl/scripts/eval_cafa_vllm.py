@@ -257,32 +257,61 @@ async def main(args):
     samples = add_structures_to_dataset(samples, max_length_protein=args.max_length_protein)
     print(f"📊 {len(samples)} samples loaded")
 
-    batches, filtered_errors = build_batches(
-        samples=samples,
-        batch_size=args.request_batch_size,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_new_tokens=args.max_new_tokens,
-        repetition_penalty=args.repetition_penalty,
-    )
-
-    # Save filtered errors (long proteins)
-    if filtered_errors:
-        error_dir = os.path.join(os.path.dirname(args.batch_inputs_dir), "error_logs")
-        os.makedirs(error_dir, exist_ok=True)
+    # Check if batches already exist on disk
+    if os.path.exists(args.batch_inputs_dir) and os.listdir(args.batch_inputs_dir):
+        print(f"🔄 Found existing batch inputs in {args.batch_inputs_dir} - loading from disk...")
         
+        # Load existing batches
+        batches = []
+        batch_files = sorted([f for f in os.listdir(args.batch_inputs_dir) if f.startswith("batch_") and f.endswith(".json")])
+        
+        for batch_file in batch_files:
+            batch_path = os.path.join(args.batch_inputs_dir, batch_file)
+            with open(batch_path, "r") as f:
+                batch = json.load(f)
+                batches.append(batch)
+        
+        # Load existing filtered errors if available
+        filtered_errors = []
+        error_dir = os.path.join(os.path.dirname(args.batch_inputs_dir), "error_logs")
         prefilter_filename = os.path.join(error_dir, "prefiltered_long_proteins.json")
-        with open(prefilter_filename, "w") as f:
-            json.dump(filtered_errors, f, indent=4)
-        print(f"🚫 Saved {len(filtered_errors)} long proteins (>1500 residues) → {prefilter_filename}")
+        
+        if os.path.exists(prefilter_filename):
+            with open(prefilter_filename, "r") as f:
+                filtered_errors = json.load(f)
+        
+        total_batched_samples = sum(len(b["protein_ids"]) for b in batches)
+        print(f"📁 Loaded {len(batches)} batches ({total_batched_samples} samples) and {len(filtered_errors)} filtered proteins from disk")
+        
+    else:
+        print(f"🔨 Creating new batches...")
+        batches, filtered_errors = build_batches(
+            samples=samples,
+            batch_size=args.request_batch_size,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_new_tokens=args.max_new_tokens,
+            repetition_penalty=args.repetition_penalty,
+        )
 
-    if batches:
-        os.makedirs(args.batch_inputs_dir, exist_ok=True)
-        for i, batch in enumerate(batches):
-            batch_filename = os.path.join(args.batch_inputs_dir, f"batch_{i}.json")
-            with open(batch_filename, "w") as f:
-                json.dump(batch, f, indent=4)
-            print(f"💾 Saved batch {i} payload → {batch_filename}")
+        # Save filtered errors (long proteins) - only if newly created
+        if filtered_errors:
+            error_dir = os.path.join(os.path.dirname(args.batch_inputs_dir), "error_logs")
+            os.makedirs(error_dir, exist_ok=True)
+            
+            prefilter_filename = os.path.join(error_dir, "prefiltered_long_proteins.json")
+            with open(prefilter_filename, "w") as f:
+                json.dump(filtered_errors, f, indent=4)
+            print(f"🚫 Saved {len(filtered_errors)} long proteins (>1500 residues) → {prefilter_filename}")
+
+        # Save batches - only if newly created
+        if batches:
+            os.makedirs(args.batch_inputs_dir, exist_ok=True)
+            for i, batch in enumerate(batches):
+                batch_filename = os.path.join(args.batch_inputs_dir, f"batch_{i}.json")
+                with open(batch_filename, "w") as f:
+                    json.dump(batch, f, indent=4)
+                print(f"💾 Saved batch {i} payload → {batch_filename}")
     
     # Updated summary
     total_samples = len(samples)

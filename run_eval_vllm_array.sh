@@ -3,10 +3,10 @@
 #SBATCH --partition=vector_gpu_priority
 #SBATCH --time=24:00:00
 #SBATCH --nodes=1                 # 1 node per array task
-#SBATCH --gpus=2                  # tensor parallel size = 2 per node
-#SBATCH --ntasks-per-node=2
-#SBATCH --cpus-per-task=12
-#SBATCH --mem=256gb
+#SBATCH --gpus=4                  # tensor parallel size = 2 per node
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=24
+#SBATCH --mem=512gb
 #SBATCH --output=serve_%A_%a.out
 #SBATCH --error=serve_%A_%a.err
 # #SBATCH --array=0-2               # <-- 3 replicas (use 0-1 for two replicas)
