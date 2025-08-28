@@ -155,6 +155,13 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
             "structure_coords": structure_coords[i] if structure_coords and i < len(structure_coords) else None,
         }
 
+    # Debug: Print array lengths for verification
+    print(f"🔗 Array lengths: completions={len(completions)}, output_protein_ids={len(output_protein_ids)}, output_go_aspects={len(output_go_aspects)}")
+    if len(output_protein_ids) > 0:
+        print(f"🔗 First few output_protein_ids: {output_protein_ids[:5]}")
+    if len(output_go_aspects) > 0:
+        print(f"🔗 First few output_go_aspects: {output_go_aspects[:5]}")
+
     # Match outputs to inputs using identifiers
     for i in range(len(completions)):
         output_protein_id = output_protein_ids[i] if i < len(output_protein_ids) else f"unknown_{i}"
@@ -165,6 +172,7 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
         input_data = input_lookup.get(key)
         if input_data is None:
             print(f"⚠️ Warning: No input data found for protein_id={output_protein_id}, go_aspect={output_go_aspect}")
+            print(f"   Available keys: {list(input_lookup.keys())[:5]}...")
             # Create minimal record for unmatched output
             input_data = {
                 "sample_id": i,
@@ -253,11 +261,11 @@ def build_batches(
         # Only create payload if we have samples in this batch
         if protein_ids:
             payload = {
-                "protein_ids": protein_ids,  # Now sent to server for tracking
+                "protein_ids": protein_ids,
                 "prompts": prompts,
                 "assistant_texts": assistant_texts,
                 "protein_sequences": protein_seqs,
-                "go_aspects": go_aspects if any(a is not None for a in go_aspects) else None,
+                "go_aspects": go_aspects,  # Keep original list, don't convert to None
                 "structure_coords": structure_coords if any(c is not None for c in structure_coords) else None,
                 "temperature": temperature,
                 "top_p": top_p,

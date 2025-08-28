@@ -2143,6 +2143,8 @@ def main(script_args: ScriptArguments):
         generation_time: float  # Total generation time in seconds
         tokens_per_second: float  # Average tokens per second
         total_tokens: int  # Total tokens generated
+        protein_ids: Optional[List[str]] = None
+        go_aspects: Optional[List[Optional[str]]] = None
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -2153,6 +2155,7 @@ def main(script_args: ScriptArguments):
 
         print(f"🧬 API received request:")
         print(f"🧬   - {len(request.prompts)} prompts")
+        print(f"🧬   - Protein IDs: {'Yes' if request.protein_ids else 'No'} ({len(request.protein_ids) if request.protein_ids else 0} items)")
         print(f"🧬   - DNA sequences: {'Yes' if request.dna_sequences else 'No'}")
         print(f"🧬   - Protein sequences: {'Yes' if request.protein_sequences else 'No'}")
         if request.dna_sequences:
@@ -2362,9 +2365,13 @@ def main(script_args: ScriptArguments):
 
         # Split prompts (and protein) evenly across DP ranks
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        print(f"🧬 Chunking {len(request.prompts)} prompts across {script_args.data_parallel_size} workers")
+        if request.protein_ids:
+            print(f"🧬 Chunking {len(request.protein_ids)} protein_ids across {script_args.data_parallel_size} workers")
+        
         chunked_protein_ids = (
             chunk_list(request.protein_ids, script_args.data_parallel_size)
-            if request.protein_ids
+            if request.protein_ids is not None
             else [[] for _ in range(script_args.data_parallel_size)]
         )
         chunked_protein_seqs = (
@@ -2384,7 +2391,7 @@ def main(script_args: ScriptArguments):
         )
         chunked_go_aspects = (
             chunk_list(request.go_aspects, script_args.data_parallel_size)
-            if request.go_aspects
+            if request.go_aspects is not None
             else [[] for _ in range(script_args.data_parallel_size)]
         )
 
@@ -2410,6 +2417,7 @@ def main(script_args: ScriptArguments):
         ):
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
+                print(f"🧬 Worker rank has no work - setting placeholders")
                 prompts_this_rank, protein_this_rank = ["<placeholder>"], [[]]
                 protein_ids_this_rank = ["<placeholder>"]
                 batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank = [], [], []
@@ -2480,7 +2488,7 @@ def main(script_args: ScriptArguments):
                     }
                 )
 
-            print(f"🧬 inputs: {inputs}")
+            # print(f"🧬 inputs: {inputs}")
 
             conn.send(
                 {
@@ -2501,19 +2509,40 @@ def main(script_args: ScriptArguments):
         raw_outputs = list(chain.from_iterable(raw_outputs))
 
         # Reconstruct identifiers in original order (same chunking as prompts)
-        flattened_protein_ids = [pid for chunk in chunked_protein_ids for pid in chunk if chunk]
-        flattened_go_aspects = [ga for chunk in chunked_go_aspects for ga in chunk if chunk]
+        # Filter out placeholder ranks using same logic as raw_outputs
+        flattened_protein_ids = []
+        flattened_go_aspects = []
+
+        for i, (chunk, prompts_chunk) in enumerate(zip(chunked_protein_ids, chunked_prompts)):
+            if prompts_chunk:  # Only check if prompts exist (worker had real work)
+                print(f"🧬 Worker {i}: {len(prompts_chunk)} prompts, {len(chunk)} protein_ids: {chunk[:3] if len(chunk) >= 3 else chunk}...")
+                # Add protein IDs from this chunk, filtering placeholders
+                for pid in chunk:
+                    if pid != "<placeholder>":
+                        flattened_protein_ids.append(pid)
+
+        for chunk, prompts_chunk in zip(chunked_go_aspects, chunked_prompts):
+            if prompts_chunk:  # Only check if prompts exist (worker had real work)
+                # Add GO aspects from this chunk
+                for ga in chunk:
+                    flattened_go_aspects.append(ga)
 
         # Filter out error responses and only process valid RequestOutput objects
         valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, "outputs")]
-        
+
         # Extract completion data
         completion_ids = [list(output.token_ids) for req_out in valid_outputs for output in req_out.outputs]
         completions = [output.text for req_out in valid_outputs for output in req_out.outputs]
-        
+
         # Extract identifiers for each completion (assuming 1 completion per input)
-        protein_ids_out = flattened_protein_ids[:len(completions)]
-        go_aspects_out = flattened_go_aspects[:len(completions)]
+        protein_ids_out = flattened_protein_ids[: len(completions)]
+        go_aspects_out = flattened_go_aspects[: len(completions)]
+
+        # Debug logging for identifiers
+        print(f"🧬 Flattened protein_ids: {len(flattened_protein_ids)} items: {flattened_protein_ids[:5]}...")
+        print(f"🧬 Flattened go_aspects: {len(flattened_go_aspects)} items: {flattened_go_aspects[:5]}...")
+        print(f"🧬 Extracted protein_ids_out: {len(protein_ids_out)} items: {protein_ids_out[:5]}...")
+        print(f"🧬 Extracted go_aspects_out: {len(go_aspects_out)} items: {go_aspects_out[:5]}...")
 
         # Debug logging for completions
         print(f"🧬 Generated {len(completions)} completions:")
@@ -2525,10 +2554,10 @@ def main(script_args: ScriptArguments):
             )
 
         return {
-            "completion_ids": completion_ids, 
+            "completion_ids": completion_ids,
             "completions": completions,
             "protein_ids": protein_ids_out,
-            "go_aspects": go_aspects_out
+            "go_aspects": go_aspects_out,
         }
 
     async def generate_with_vllm(request: GenerateRequest):
