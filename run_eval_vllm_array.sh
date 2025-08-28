@@ -210,7 +210,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
     --max_samples -1 \
     --request_batch_size 64 \
-    --concurrent_requests 2 \
+    --concurrent_requests 4 \
     --temperature 0 \
     --top_p 1 \
     --max_new_tokens 6000 \

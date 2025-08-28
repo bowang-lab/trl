@@ -174,7 +174,7 @@ def build_batches(
 ):
     batches = []
     filtered_errors = []
-    
+
     for i in range(0, len(samples), batch_size):
         end = min(i + batch_size, len(samples))
         batch_ds = samples.select(range(i, end))
@@ -184,7 +184,7 @@ def build_batches(
             # Check protein sequence length before adding to batch
             seqs = s.get("protein_sequences", [s["sequence"]])
             max_len_in_sample = max(len(seq) for seq in seqs) if seqs else 0
-            
+
             if max_len_in_sample > 1500:
                 # Filter out long proteins - add to error list
                 error_record = {
@@ -195,7 +195,7 @@ def build_batches(
                     "protein_sequences": seqs,
                     "ground_truth": s.get("ground_truth", ""),
                     "structure_path": s.get("structure_path", ""),
-                    "success": False
+                    "success": False,
                 }
                 filtered_errors.append(error_record)
                 print(f"⚠️ Filtered protein {s['protein_id']} (length: {max_len_in_sample})")
@@ -260,29 +260,33 @@ async def main(args):
     # Check if batches already exist on disk
     if os.path.exists(args.batch_inputs_dir) and os.listdir(args.batch_inputs_dir):
         print(f"🔄 Found existing batch inputs in {args.batch_inputs_dir} - loading from disk...")
-        
+
         # Load existing batches
         batches = []
-        batch_files = sorted([f for f in os.listdir(args.batch_inputs_dir) if f.startswith("batch_") and f.endswith(".json")])
-        
+        batch_files = sorted(
+            [f for f in os.listdir(args.batch_inputs_dir) if f.startswith("batch_") and f.endswith(".json")]
+        )
+
         for batch_file in batch_files:
             batch_path = os.path.join(args.batch_inputs_dir, batch_file)
             with open(batch_path, "r") as f:
                 batch = json.load(f)
                 batches.append(batch)
-        
+
         # Load existing filtered errors if available
         filtered_errors = []
         error_dir = os.path.join(os.path.dirname(args.batch_inputs_dir), "error_logs")
         prefilter_filename = os.path.join(error_dir, "prefiltered_long_proteins.json")
-        
+
         if os.path.exists(prefilter_filename):
             with open(prefilter_filename, "r") as f:
                 filtered_errors = json.load(f)
-        
+
         total_batched_samples = sum(len(b["protein_ids"]) for b in batches)
-        print(f"📁 Loaded {len(batches)} batches ({total_batched_samples} samples) and {len(filtered_errors)} filtered proteins from disk")
-        
+        print(
+            f"📁 Loaded {len(batches)} batches ({total_batched_samples} samples) and {len(filtered_errors)} filtered proteins from disk"
+        )
+
     else:
         print(f"🔨 Creating new batches...")
         batches, filtered_errors = build_batches(
@@ -298,7 +302,7 @@ async def main(args):
         if filtered_errors:
             error_dir = os.path.join(os.path.dirname(args.batch_inputs_dir), "error_logs")
             os.makedirs(error_dir, exist_ok=True)
-            
+
             prefilter_filename = os.path.join(error_dir, "prefiltered_long_proteins.json")
             with open(prefilter_filename, "w") as f:
                 json.dump(filtered_errors, f, indent=4)
@@ -312,12 +316,14 @@ async def main(args):
                 with open(batch_filename, "w") as f:
                     json.dump(batch, f, indent=4)
                 print(f"💾 Saved batch {i} payload → {batch_filename}")
-    
+
     # Updated summary
     total_samples = len(samples)
     batched_samples = sum(len(b["protein_ids"]) for b in batches)
     filtered_samples = len(filtered_errors)
-    print(f"📊 Summary: {total_samples} total → {batched_samples} batched, {filtered_samples} filtered (length > 1500)")
+    print(
+        f"📊 Summary: {total_samples} total → {batched_samples} batched, {filtered_samples} filtered (length > 1500)"
+    )
 
     t0 = time.time()
     connector = aiohttp.TCPConnector(limit=args.concurrent_requests)
@@ -394,7 +400,9 @@ async def main(args):
                 print(f"❌ Saved batch {i} error → {error_filename}")
                 failed_batches += 1
 
-        print(f"📊 Final Summary: {successful_batches} successful batches, {failed_batches} failed batches, {len(filtered_errors)} prefiltered proteins")
+        print(
+            f"📊 Final Summary: {successful_batches} successful batches, {failed_batches} failed batches, {len(filtered_errors)} prefiltered proteins"
+        )
 
 
 if __name__ == "__main__":

@@ -1541,8 +1541,8 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         print(
             f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists"
         )
-        for i, protein_seqs in enumerate(batch_protein_sequences):
-            print(f"🧬 Sample {i}: has {len(protein_seqs)} protein sequences")
+        # for i, protein_seqs in enumerate(batch_protein_sequences):
+            # print(f"🧬 Sample {i}: has {len(protein_seqs)} protein sequences")
 
         # STEP 2: Process using PLProcessor (EXACTLY like DNA with DLProcessor)
         print(f"🧬 Calling PLProcessor with text and batch_protein_sequences...")
@@ -2299,7 +2299,7 @@ def main(script_args: ScriptArguments):
 
                 inputs.append({"text": formatted_text, "dna_sequences": dna_seqs})
 
-            print(f"🧬 inputs: {inputs}")
+            # print(f"🧬 inputs: {inputs}")
 
             conn.send(
                 {
