@@ -78,7 +78,7 @@ EVAL_SCRIPT="$ROOT_DIR/trl/trl/scripts/eval_cafa_vllm.py"
 DTYPE="auto"
 KV_CACHE_DTYPE="auto"
 MAX_MODEL_LEN=8000  # 4096
-GPU_MEM_UTIL=0.75 #  0.88
+GPU_MEM_UTIL=0.7 #  0.88
 TRUST_REMOTE_CODE=true
 ENABLE_PREFIX_CACHE=false
 ENFORCE_EAGER=true
@@ -208,7 +208,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --val_split_ratio 0.1 \
     --seed 23 \
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
-    --max_samples 128 \
+    --max_samples 256 \
     --request_batch_size 64 \
     --concurrent_requests 4 \
     --temperature 0 \

@@ -130,6 +130,7 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
     # Get input data
     protein_ids = batch_input.get("protein_ids", [])
     prompts = batch_input.get("prompts", [])
+    assistant_texts = batch_input.get("assistant_texts", [])
     protein_sequences = batch_input.get("protein_sequences", [])
     go_aspects = batch_input.get("go_aspects", [])
     structure_coords = batch_input.get("structure_coords", [])
@@ -141,6 +142,7 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
             "batch_index": batch_index,
             "protein_id": protein_ids[i] if i < len(protein_ids) else f"unknown_{i}",
             "prompt": prompts[i] if i < len(prompts) else "",
+            "assistant_texts": assistant_texts[i] if i < len(assistant_texts) else "",
             "protein_sequences": protein_sequences[i] if i < len(protein_sequences) else [],
             "go_aspect": go_aspects[i] if go_aspects and i < len(go_aspects) else None,
             "generated_response": completions[i] if i < len(completions) else "",
@@ -153,15 +155,16 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
             "completion_id": completion_ids[i] if i < len(completion_ids) else f"batch_{batch_index}_sample_{i}",
         }
 
+        # Set ground truth from assistant_texts (which is the correct ground truth)
+        sample_record["ground_truth"] = assistant_texts[i] if i < len(assistant_texts) else ""
+
         # Try to get additional metadata from original samples if available
         try:
             original_sample_idx = batch_index * len(protein_ids) + i
             if hasattr(samples, "__getitem__") and original_sample_idx < len(samples):
                 original_sample = samples[original_sample_idx]
-                sample_record["ground_truth"] = original_sample.get("ground_truth", "")
                 sample_record["structure_path"] = original_sample.get("structure_path", "")
         except (IndexError, AttributeError):
-            sample_record["ground_truth"] = ""
             sample_record["structure_path"] = ""
 
         joined_samples.append(sample_record)

@@ -2319,9 +2319,12 @@ def main(script_args: ScriptArguments):
         raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
         raw_outputs = list(chain.from_iterable(raw_outputs))
 
-        completion_ids = [list(output.token_ids) for req_out in raw_outputs for output in req_out.outputs]
+        # Filter out error responses and only process valid RequestOutput objects
+        valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, 'outputs')]
+        
+        completion_ids = [list(output.token_ids) for req_out in valid_outputs for output in req_out.outputs]
 
-        completions = [output.text for req_out in raw_outputs for output in req_out.outputs]
+        completions = [output.text for req_out in valid_outputs for output in req_out.outputs]
 
         # Debug logging for completions
         print(f"🧬 Generated {len(completions)} completions:")
@@ -2488,9 +2491,12 @@ def main(script_args: ScriptArguments):
         raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
         raw_outputs = list(chain.from_iterable(raw_outputs))
 
-        completion_ids = [list(output.token_ids) for req_out in raw_outputs for output in req_out.outputs]
+        # Filter out error responses and only process valid RequestOutput objects
+        valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, 'outputs')]
+        
+        completion_ids = [list(output.token_ids) for req_out in valid_outputs for output in req_out.outputs]
 
-        completions = [output.text for req_out in raw_outputs for output in req_out.outputs]
+        completions = [output.text for req_out in valid_outputs for output in req_out.outputs]
 
         # Debug logging for completions
         print(f"🧬 Generated {len(completions)} completions:")
