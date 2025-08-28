@@ -208,7 +208,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --val_split_ratio 0.1 \
     --seed 23 \
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
-    --max_samples -1 \
+    --max_samples 128 \
     --request_batch_size 64 \
     --concurrent_requests 4 \
     --temperature 0 \
