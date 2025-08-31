@@ -220,7 +220,7 @@ def join_batch_input_output(batch_input: dict, batch_output: dict, batch_index: 
 
 
 def build_batches(
-    samples, batch_size: int, temperature: float, top_p: float, max_new_tokens: int, repetition_penalty: float
+    samples, batch_size: int, temperature: float, top_p: float, top_k: int, max_new_tokens: int, repetition_penalty: float
 ):
     batches = []
     filtered_errors = []
@@ -269,6 +269,7 @@ def build_batches(
                 "structure_coords": structure_coords if any(c is not None for c in structure_coords) else None,
                 "temperature": temperature,
                 "top_p": top_p,
+                "top_k": top_k,
                 "max_tokens": max_new_tokens,
                 "repetition_penalty": repetition_penalty,
                 "generation_kwargs": {},
@@ -301,6 +302,7 @@ async def main(args):
         ppi_in_prompt=args.ppi_in_prompt,
         debug=args.debug,
     )
+    val_ds = val_ds.shuffle(seed=args.seed)
 
     n = len(val_ds) if args.max_samples <= 0 else min(args.max_samples, len(val_ds))
     samples = val_ds.select(range(n))
@@ -344,6 +346,7 @@ async def main(args):
             batch_size=args.request_batch_size,
             temperature=args.temperature,
             top_p=args.top_p,
+            top_k=args.top_k,
             max_new_tokens=args.max_new_tokens,
             repetition_penalty=args.repetition_penalty,
         )
@@ -500,6 +503,7 @@ if __name__ == "__main__":
     p.add_argument("--max_new_tokens", type=int, default=1024)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
+    p.add_argument("--top_k", type=int, default=20)
     p.add_argument("--repetition_penalty", type=float, default=1.0)
 
     p.add_argument("--save_results", action="store_true")

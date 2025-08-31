@@ -2657,8 +2657,8 @@ def main(script_args: ScriptArguments):
         top_p: float = 1.0
         top_k: int = -1
         min_p: float = 0.0
-        max_tokens: int = 5120
-        repetition_penalty: float = 1.0
+        max_tokens: int = 6000
+        repetition_penalty: float = 0.01
         generation_kwargs: Dict = field(default_factory=dict)
 
     class GenerateEmbedsResponse(BaseModel):
