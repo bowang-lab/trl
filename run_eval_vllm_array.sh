@@ -217,7 +217,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --top_p 0.95 \
     --top_k 20 \
     --max_new_tokens 6000 \
-    --repetition_penalty 0.01 \
+    --repetition_penalty 1 \
     --save_results \
     --batch_inputs_dir "$REPL_DIR/batch_inputs" \
     --batch_outputs_dir "$REPL_DIR/batch_outputs" \
