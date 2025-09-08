@@ -352,6 +352,12 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
         enable_prompt_embeds=True,
     )
 
+    vllm_tokenizer = llm.get_tokenizer()
+    print("="*80)
+    print(f"[VLLM WORKER {data_parallel_rank} DIAGNOSTICS]")
+    print(f"  Tokenizer Vocab Size: {vllm_tokenizer.vocab_size}") # Use .vocab_size for vLLM tokenizer
+    print(f"  <|protein_pad|> ID: {vllm_tokenizer.convert_tokens_to_ids('<|protein_pad|>')}")
+
     # Initialize biological sequence processing components (DNA OR protein, not both)
     dna_processor = None
     protein_processor = None
@@ -1869,7 +1875,8 @@ def main(script_args: ScriptArguments):
                         formatted_text = tok.apply_chat_template(
                             [msg],
                             tokenize=False,
-                            add_generation_prompt=True,             
+                            add_generation_prompt=True,
+                            enable_thinking=True,             
                         )
                         
                     except Exception as e:

@@ -143,3 +143,9 @@ checklink/cookies.txt
 nbs/wandb/
 examples/notebooks/wandb/
 wandb/
+
+*.err
+*.out
+vllm_eval/
+vllm_eval_dp/
+*.json
