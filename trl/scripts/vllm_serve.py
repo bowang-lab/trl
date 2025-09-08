@@ -433,38 +433,10 @@ def llm_worker(
     # one on the fly (once) so vLLM will always use the Rust tokenizer.
     # ------------------------------------------------------------------
 
-    def ensure_fast_tok(model_dir: str) -> str:
-        """Return path that contains tokenizer.json; build it if necessary."""
-        # If user explicitly provided --tokenizer we do nothing.
-        if script_args.tokenizer:
-            return script_args.tokenizer
-
-        model_path = Path(model_dir)
-        if (model_path / "tokenizer.json").exists():
-            return str(model_path)  # already fast
-
-        fast_dir = model_path / "fast_tok"
-        if not (fast_dir / "tokenizer.json").exists():
-            fast_dir.mkdir(exist_ok=True)
-            try:
-                from transformers import AutoTokenizer
-
-                print(f"🪄 Building fast tokenizer in {fast_dir} …")
-                tok = AutoTokenizer.from_pretrained(model_dir, use_fast=True, trust_remote_code=True)
-                tok.save_pretrained(fast_dir)
-                print("✅ Fast tokenizer created")
-            except Exception as e:
-                print(f"⚠️ Could not create fast tokenizer automatically: {e}")
-                # Fallback to slow tokenizer path
-                return str(model_path)
-        return str(fast_dir)
-
-    tokenizer_path = script_args.tokenizer
 
     # Always use standard vLLM for hosting
     llm = LLM(
         model=script_args.model,
-        tokenizer=tokenizer_path,
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
