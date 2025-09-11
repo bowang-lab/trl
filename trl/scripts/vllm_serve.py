@@ -556,8 +556,12 @@ def llm_worker(
                 llm.collective_rpc(method="close_communicator")
             break
         
-        print(f"command type: {type(command)}")
-        print("command type", command["type"])
+
+        print("🛎️ Worker received command")
+        print(command)
+        
+        # print(f"command type: {type(command)}")
+        # print("command type", command["type"])
         # Handle commands
         if command["type"] in {'call', 'fire_and_forget'}:
 
@@ -1533,25 +1537,25 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         print(f"🧬 Processing {len(inputs)} input samples")
         print(f"inputs: {inputs[0].keys()}")
 
-        # STEP 1: Extract text and protein sequences from inputs (EXACTLY like DNA)
-        batch_text = []
-        batch_protein_sequences = []
-        batch_batch_idx_map = []
-        batch_structure_coords = []
-        batch_go_aspects = []
+        # # STEP 1: Extract text and protein sequences from inputs (EXACTLY like DNA)
+        # batch_text = []
+        # batch_protein_sequences = []
+        # batch_batch_idx_map = []
+        # batch_structure_coords = []
+        # batch_go_aspects = []
 
-        for inp in inputs:
-            text = inp["text"]
-            protein_sequences = inp.get("protein_sequences", [])
-            batch_idx_map = inp.get("batch_idx_map", [])
-            structure_coords = inp.get("structure_coords", None)
-            go_aspects = inp.get("go_aspects", None)
+        # for inp in inputs:
+        #     text = inp["text"]
+        #     protein_sequences = inp.get("protein_sequences", [])
+        #     batch_idx_map = inp.get("batch_idx_map", [])
+        #     structure_coords = inp.get("structure_coords", None)
+        #     go_aspects = inp.get("go_aspects", None)
 
-            batch_text.append(text)
-            batch_protein_sequences.append(protein_sequences)
-            batch_batch_idx_map.append(batch_idx_map)
-            batch_structure_coords.append(structure_coords)
-            batch_go_aspects.append(go_aspects)
+        #     batch_text.append(text)
+        #     batch_protein_sequences.append(protein_sequences)
+        #     batch_batch_idx_map.append(batch_idx_map)
+        #     batch_structure_coords.append(structure_coords)
+        #     batch_go_aspects.append(go_aspects)
 
         print(
             f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists"
@@ -1597,7 +1601,20 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         # # Check if we have protein data
         # protein_sequences_batch = processed.get("protein_sequences")
         # batch_idx_map = processed.get("batch_idx_map")
-        protein_sequences_batch = batch_protein_sequences
+        protein_sequences_batch = inputs.get("protein_sequences", [])
+        print("protein_sequences_batch:", protein_sequences_batch)
+        batch_idx_map = inputs.get("batch_idx_map", [])
+        print("batch_idx_map:", batch_idx_map)
+        structure_paths = inputs.get("structure_coords", None)
+        structure_coords = [_load_structure_coords(path) for path in structure_paths] 
+        print("structure_coords:", structure_coords)
+        go_aspects_data = inputs.get("go_aspects", None)
+        print("go_aspects:", go_aspects)
+        input_ids = inputs.get("input_ids", None)
+        print("input_ids:", input_ids)
+        attention_mask = inputs.get("attention_mask", None)
+        print("attention_mask:", attention_mask)
+        
 
         if protein_sequences_batch is not None and len(protein_sequences_batch) > 0:
             print(f"🧬 ✅ Protein data provided - processing protein embeddings...")
@@ -1639,7 +1656,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             print(f"🧬 Protein successfully integrated into text embeddings!")
 
             # STEP 5.5: Process GO aspects if available
-            go_aspects_data = processed.get("go_aspects")
+            # go_aspects_data = processed.get("go_aspects")
             if go_aspects_data is not None and any(aspect is not None for aspect in go_aspects_data):
                 print(f"🧬 ✅ GO aspects data provided - processing GO embeddings...")
 
@@ -2089,6 +2106,8 @@ def main(script_args: ScriptArguments):
         batch_idx_map: Optional[List[List[int]]] = None  # Mapping of batch indices for protein sequences
         structure_coords: Optional[List[Optional[Any]]] = None  # Structure coordinates for protein sequences
         go_aspects: Optional[List[Optional[str]]] = None  # Gene Ontology aspects for protein sequences
+        input_ids: Optional[List[List[int]]] = None  # Direct input IDs (bypass tokenization)
+        attention_mask: Optional[List[List[int]]] = None  # Attention mask for input IDs
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -2111,6 +2130,8 @@ def main(script_args: ScriptArguments):
             _check_len("batch_idx_map", self.batch_idx_map)
             _check_len("structure_coords", self.structure_coords)
             _check_len("go_aspects", self.go_aspects)
+            _check_len("prompt_ids", self.input_ids)
+            _check_len("attention_mask", self.attention_mask)
 
             """Validate that dna_sequences and protein_sequences length matches prompts length if provided."""
             if self.dna_sequences is not None:
@@ -2187,6 +2208,7 @@ def main(script_args: ScriptArguments):
         print(f"🧬   - GO aspects: {'Yes' if request.go_aspects else 'No'}")
         print(f"🧬   - Temperature: {request.temperature}")
         print(f"🧬   - Max tokens: {request.max_tokens}")
+        print(f"🧬   - Top-p: {request.input_ids}")
 
         # Check if we're using DNA processing
         if request.dna_sequences and script_args.use_dna_llm and script_args.dna_model_name:
@@ -2413,6 +2435,17 @@ def main(script_args: ScriptArguments):
             if request.go_aspects is not None
             else [[] for _ in range(script_args.data_parallel_size)]
         )
+        chunked_input_ids = (
+            chunk_list(request.input_ids, script_args.data_parallel_size)
+            if request.input_ids is not None
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
+
+        chunked_attention_mask = (
+            chunk_list(request.attention_mask, script_args.data_parallel_size)
+            if request.attention_mask is not None
+            else [[] for _ in range(script_args.data_parallel_size)]
+        )
 
         # ------------------------------------------------------------------
         # Dispatch to workers
@@ -2425,6 +2458,8 @@ def main(script_args: ScriptArguments):
             batch_idx_this_rank,
             struct_coords_this_rank,
             go_aspects_this_rank,
+            input_ids_this_rank,
+            attention_mask_this_rank,
         ) in zip(
             connections,
             chunked_prompts,
@@ -2433,13 +2468,15 @@ def main(script_args: ScriptArguments):
             chunked_batch_idx_map,
             chunked_structure_coords,
             chunked_go_aspects,
+            chunked_input_ids,
+            chunked_attention_mask,
         ):
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
                 print(f"🧬 Worker rank has no work - setting placeholders")
                 prompts_this_rank, protein_this_rank = ["<placeholder>"], [[]]
                 protein_ids_this_rank = ["<placeholder>"]
-                batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank = [], [], []
+                batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank, input_ids_this_rank, attention_mask_this_rank = [], [], [], [], []
 
             # ---- build the per-example payload -------------------------------------------------------
             #   PLProcessor expects:
@@ -2469,6 +2506,8 @@ def main(script_args: ScriptArguments):
                 batch_idx = batch_idx_this_rank[i] if i < len(batch_idx_this_rank) else []
                 struct_coords = struct_coords_this_rank[i] if i < len(struct_coords_this_rank) else None
                 go_aspect = go_aspects_this_rank[i] if i < len(go_aspects_this_rank) else None
+                input_ids = input_ids_this_rank[i] if i < len(input_ids_this_rank) else []
+                attention_mask = attention_mask_this_rank[i] if i < len(attention_mask_this_rank) else []
 
                 # Format the prompt properly for the PLProcessor using the chat template
                 # Use the text tokenizer's chat template to format the conversation
@@ -2504,21 +2543,29 @@ def main(script_args: ScriptArguments):
                         "batch_idx_map": batch_idx,
                         "structure_coords": struct_coords,
                         "go_aspects": go_aspect,
+                        "input_ids": input_ids,
+                        "attention_mask": attention_mask,
+                        
                     }
                 )
 
             print(f"🧬 inputs: {inputs}")
 
-            conn.send(
-                {
-                    "type": "call",
-                    "method": "generate",
-                    "kwargs": {
-                        "inputs": inputs,  # << minimalistic now
-                        "sampling_params": sampling_params,
-                    },
-                }
-            )
+            print("sending it to conn", conn)
+            try: 
+                conn.send(
+                    {
+                        "type": "call",
+                        "method": "generate",
+                        "kwargs": {
+                            "inputs": inputs,  # << minimalistic now
+                            "sampling_params": sampling_params,
+                        },
+                    }
+                )
+            except Exception as e:
+                print(f"❌ Error sending to connection: {e}")
+                
 
         # ------------------------------------------------------------------
         # Gather & flatten results
