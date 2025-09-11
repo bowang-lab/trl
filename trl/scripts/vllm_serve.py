@@ -158,6 +158,7 @@ def load_protein_components():
         from bioreason2.models.protein_encoder import create_protein_encoder
         from bioreason2.models.go_graph_encoder import create_go_graph_encoder_pipeline
         from bioreason2.models.special_tokens import get_all_special_tokens, get_token
+        from bioreason2.utils.esm_embed import _load_structure_coords
 
         # ESM3 imports for protein processing
         from esm.models.esm3 import ESM3
@@ -433,31 +434,31 @@ def llm_worker(
     # one on the fly (once) so vLLM will always use the Rust tokenizer.
     # ------------------------------------------------------------------
 
-    def ensure_fast_tok(model_dir: str) -> str:
-        """Return path that contains tokenizer.json; build it if necessary."""
-        # If user explicitly provided --tokenizer we do nothing.
-        if script_args.tokenizer:
-            return script_args.tokenizer
+    # def ensure_fast_tok(model_dir: str) -> str:
+    #     """Return path that contains tokenizer.json; build it if necessary."""
+    #     # If user explicitly provided --tokenizer we do nothing.
+    #     if script_args.tokenizer:
+    #         return script_args.tokenizer
 
-        model_path = Path(model_dir)
-        if (model_path / "tokenizer.json").exists():
-            return str(model_path)  # already fast
+    #     model_path = Path(model_dir)
+    #     if (model_path / "tokenizer.json").exists():
+    #         return str(model_path)  # already fast
 
-        fast_dir = model_path / "fast_tok"
-        if not (fast_dir / "tokenizer.json").exists():
-            fast_dir.mkdir(exist_ok=True)
-            try:
-                from transformers import AutoTokenizer
+    #     fast_dir = model_path / "fast_tok"
+    #     if not (fast_dir / "tokenizer.json").exists():
+    #         fast_dir.mkdir(exist_ok=True)
+    #         try:
+    #             from transformers import AutoTokenizer
 
-                print(f"🪄 Building fast tokenizer in {fast_dir} …")
-                tok = AutoTokenizer.from_pretrained(model_dir, use_fast=True, trust_remote_code=True)
-                tok.save_pretrained(fast_dir)
-                print("✅ Fast tokenizer created")
-            except Exception as e:
-                print(f"⚠️ Could not create fast tokenizer automatically: {e}")
-                # Fallback to slow tokenizer path
-                return str(model_path)
-        return str(fast_dir)
+    #             print(f"🪄 Building fast tokenizer in {fast_dir} …")
+    #             tok = AutoTokenizer.from_pretrained(model_dir, use_fast=True, trust_remote_code=True)
+    #             tok.save_pretrained(fast_dir)
+    #             print("✅ Fast tokenizer created")
+    #         except Exception as e:
+    #             print(f"⚠️ Could not create fast tokenizer automatically: {e}")
+    #             # Fallback to slow tokenizer path
+    #             return str(model_path)
+    #     return str(fast_dir)
 
     tokenizer_path = script_args.tokenizer
 
@@ -550,18 +551,25 @@ def llm_worker(
         try:
             command = connection.recv()
         except KeyboardInterrupt:
+            print("🛑 Worker received KeyboardInterrupt, shutting down …")
             if hasattr(llm, "collective_rpc"):
                 llm.collective_rpc(method="close_communicator")
             break
-
+        
+        print(f"command type: {type(command)}")
+        print("command type", command["type"])
         # Handle commands
-        if command["type"] in ["call", "fire_and_forget"]:
+        if command["type"] in {'call', 'fire_and_forget'}:
+
+            print(f"📬 Received command: {command['type']} - {command['method']}")
+        
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
 
             try:
                 # NEW: direct prompt_embeds path -----------------------------------------------------
                 if method_name == "generate" and "prompt_embeds" in kwargs:
+                    print("🪄 Handling direct prompt_embeds generation request")
                     # kwargs["prompt_embeds"] is either a single 2-D list or a list of 2-D lists (batched)
                     embeds_payload = kwargs.pop("prompt_embeds")
                     sampling_params = (
@@ -584,12 +592,16 @@ def llm_worker(
                     result = outputs_all
                 # -----------------------------------------------------------------------------------
                 elif method_name == "generate" and dna_processor is not None:
+                    print("🧬 Processing DNA-enhanced generation request")
                     result = generate_with_dna_embeddings(llm, dna_processor, kwargs, device)
-                # Handle protein-enhanced generation
                 elif method_name == "generate" and protein_processor is not None:
+                    print("🧬 Processing protein-enhanced generation request")
                     result = generate_with_protein_embeddings(llm, protein_processor, kwargs, device)
                 else:
                     # Standard vLLM handling (including pre-processed embeddings)
+                    print("method_name", method_name)
+                    print("protein_processor:", protein_processor)
+                    print(f"🔍 Handling method: {method_name} (args: {len(args)}, kwargs: {len(kwargs)})")
                     method = getattr(llm, method_name)
                     result = method(*args, **kwargs)
 
@@ -1011,6 +1023,8 @@ class ProteinEmbeddingProcessor:
         from esm.sdk.api import ESMProtein, SamplingConfig
         from esm.utils.constants.models import ESM3_OPEN_SMALL
         from bioreason2.models.protein_encoder import create_protein_encoder
+        from bioreason2.utils.esm_embed import _load_structure_coords
+
 
         self.protein_encoder = create_protein_encoder(protein_model_name, inference_mode=True)
         self.protein_model = self.protein_encoder.model.to(self.device)
@@ -1517,6 +1531,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         # Protein+text inputs format
         inputs = kwargs["inputs"]
         print(f"🧬 Processing {len(inputs)} input samples")
+        print(f"inputs: {inputs[0].keys()}")
 
         # STEP 1: Extract text and protein sequences from inputs (EXACTLY like DNA)
         batch_text = []
@@ -1548,38 +1563,41 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         print(f"🧬 Calling PLProcessor with text and batch_protein_sequences...")
         print(f"🧬 Text sample: {batch_text[0][:200]}..." if batch_text[0] else "🧬 Empty text")
 
-        processed = protein_processor.processor(
-            text=batch_text,
-            batch_protein_sequences=batch_protein_sequences,
-            batch_batch_idx_map=batch_batch_idx_map,
-            batch_structure_coords=batch_structure_coords,
-            batch_go_aspects=batch_go_aspects,
-            max_length_text=2048,
-            max_length_protein=2048,
-            return_tensors="pt",
-        )
+        # processed = protein_processor.processor(
+        #     text=batch_text,
+        #     batch_protein_sequences=batch_protein_sequences,
+        #     batch_idx_map=batch_batch_idx_map,
+        #     structure_coords=batch_structure_coords,
+        #     batch_go_aspects=batch_go_aspects,
+        #     max_length_text=2048,
+        #     max_length_protein=2048,
+        #     return_tensors="pt",
+        # )
 
-        structure_coords = processed.get("structure_coords")
 
-        # Get input_ids and attention_mask
-        input_ids = processed["input_ids"].to(device)
-        attention_mask = processed["attention_mask"].to(device)
 
-        print(f"🧬 Input IDs shape: {input_ids.shape}")
-        print(f"🧬 Attention mask shape: {attention_mask.shape}")
-        # for b in range(input_ids.shape[0]):
-        #     decoded = protein_processor.text_tokenizer.decode(
-        #         input_ids[b][attention_mask[b].bool()],
-        #         skip_special_tokens=False
-        #     )
-        #     print(f"[{b}] endswith assistant? ",
-        #         decoded.strip().endswith("<|im_start|>assistant"))
-        #     print(decoded[-200:])
-        #     print("length of decoded: ", len(decoded))
+        # structure_coords = processed.get("structure_coords")
 
-        # Check if we have protein data
-        protein_sequences_batch = processed.get("protein_sequences")
-        batch_idx_map = processed.get("batch_idx_map")
+        # # Get input_ids and attention_mask
+        # input_ids = processed["input_ids"].to(device)
+        # attention_mask = processed["attention_mask"].to(device)
+
+        # print(f"🧬 Input IDs shape: {input_ids.shape}")
+        # print(f"🧬 Attention mask shape: {attention_mask.shape}")
+        # # for b in range(input_ids.shape[0]):
+        # #     decoded = protein_processor.text_tokenizer.decode(
+        # #         input_ids[b][attention_mask[b].bool()],
+        # #         skip_special_tokens=False
+        # #     )
+        # #     print(f"[{b}] endswith assistant? ",
+        # #         decoded.strip().endswith("<|im_start|>assistant"))
+        # #     print(decoded[-200:])
+        # #     print("length of decoded: ", len(decoded))
+
+        # # Check if we have protein data
+        # protein_sequences_batch = processed.get("protein_sequences")
+        # batch_idx_map = processed.get("batch_idx_map")
+        protein_sequences_batch = batch_protein_sequences
 
         if protein_sequences_batch is not None and len(protein_sequences_batch) > 0:
             print(f"🧬 ✅ Protein data provided - processing protein embeddings...")
@@ -2203,6 +2221,7 @@ def main(script_args: ScriptArguments):
 
     # ----------------------------------------------------------------------
     #  DNA-aware generation  ― no more DNAInput wrappers
+
     # ----------------------------------------------------------------------
     async def generate_with_dna_processing(request: GenerateRequest):
         """
@@ -2303,7 +2322,7 @@ def main(script_args: ScriptArguments):
 
                 inputs.append({"text": formatted_text, "dna_sequences": dna_seqs})
 
-            # print(f"🧬 inputs: {inputs}")
+            # print(f"🧬 inputs: {inputs}"
 
             conn.send(
                 {
@@ -2488,7 +2507,7 @@ def main(script_args: ScriptArguments):
                     }
                 )
 
-            # print(f"🧬 inputs: {inputs}")
+            print(f"🧬 inputs: {inputs}")
 
             conn.send(
                 {
