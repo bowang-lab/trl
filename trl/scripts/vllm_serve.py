@@ -38,6 +38,7 @@ from trl.import_utils import (
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForMaskedLM, AutoConfig
 from esm.sdk.api import ESMProtein, SamplingConfig
+from bioreason2.utils.esm_embed import _load_structure_coords
 
 
 # Import DNA processing components with proper error handling
@@ -158,7 +159,7 @@ def load_protein_components():
         from bioreason2.models.protein_encoder import create_protein_encoder
         from bioreason2.models.go_graph_encoder import create_go_graph_encoder_pipeline
         from bioreason2.models.special_tokens import get_all_special_tokens, get_token
-        from bioreason2.utils.esm_embed import _load_structure_coords
+        
 
         # ESM3 imports for protein processing
         from esm.models.esm3 import ESM3
@@ -1625,7 +1626,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             print(f"🧬 Protein sequences count: {len(protein_sequences_batch)}")
             print(f"🧬 Batch idx map: {batch_idx_map}")
 
-            batch_size = input_ids.shape[0]
+            batch_size = len(input_ids)
 
             # STEP 3: Process protein embeddings using EXACT same logic as ProteinLLMModel.generate
             protein_embeddings = protein_processor.process_protein_embeddings(
@@ -1633,7 +1634,12 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             )
 
             # STEP 4: Get text embeddings (EXACT same as ProteinLLMModel.generate)
-            print(f"🧬 About to call get_text_embeddings with input_ids shape: {input_ids.shape}")
+            # print(f"🧬 About to call get_text_embeddings with input_ids shape: {input_ids.shape}")
+            #make sure input_ids is torch tensor
+            if not isinstance(input_ids, torch.Tensor):
+                input_ids = torch.tensor(input_ids, dtype=torch.long)
+            input_ids = input_ids.to(device)
+            
             text_embeddings = protein_processor.get_text_embeddings(input_ids)
             print(f"🧬 Text embeddings shape: {text_embeddings.shape}")
 
@@ -1664,7 +1670,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             if go_aspects_data is not None and any(aspect is not None for aspect in go_aspects_data):
                 print(f"🧬 ✅ GO aspects data provided - processing GO embeddings...")
 
-                batch_size = input_ids.shape[0]
+                batch_size = len(input_ids)
                 go_embeddings = protein_processor.process_go_aspects(go_aspects_data, batch_size)
 
                 if go_embeddings is not None:
