@@ -1557,15 +1557,15 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         #     batch_structure_coords.append(structure_coords)
         #     batch_go_aspects.append(go_aspects)
 
-        print(
-            f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists"
-        )
+        # print(
+        #     f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists"
+        # )
         # for i, protein_seqs in enumerate(batch_protein_sequences):
         # print(f"🧬 Sample {i}: has {len(protein_seqs)} protein sequences")
 
         # STEP 2: Process using PLProcessor (EXACTLY like DNA with DLProcessor)
         print(f"🧬 Calling PLProcessor with text and batch_protein_sequences...")
-        print(f"🧬 Text sample: {batch_text[0][:200]}..." if batch_text[0] else "🧬 Empty text")
+        # print(f"🧬 Text sample: {batch_text[0][:200]}..." if batch_text[0] else "🧬 Empty text")
 
         # processed = protein_processor.processor(
         #     text=batch_text,
@@ -1609,7 +1609,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         structure_coords = [_load_structure_coords(path) for path in structure_paths] 
         print("structure_coords:", structure_coords)
         go_aspects_data = inputs.get("go_aspects", None)
-        print("go_aspects:", go_aspects)
+        print("go_aspects:", go_aspects_data)
         input_ids = inputs.get("input_ids", None)
         print("input_ids:", input_ids)
         attention_mask = inputs.get("attention_mask", None)
@@ -2571,8 +2571,11 @@ def main(script_args: ScriptArguments):
         # Gather & flatten results
         # ------------------------------------------------------------------
         raw_outputs = [conn.recv() for conn in connections]
+        print(f"🧬 raw_outputs1:\n{raw_outputs}\n\n")
         raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
+        print(f"🧬 raw_outputs2:\n{raw_outputs}\n\n")
         raw_outputs = list(chain.from_iterable(raw_outputs))
+        print(f"🧬 raw_outputs3:\n{raw_outputs}\n\n")
 
         # Reconstruct identifiers in original order (same chunking as prompts)
         # Filter out placeholder ranks using same logic as raw_outputs
