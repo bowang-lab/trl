@@ -1,25 +1,28 @@
 #!/bin/bash
 #SBATCH --job-name=serve_protein_qwen_vllm_replicas
 #SBATCH --partition=vector_gpu_priority
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1                 # 1 node per array task
-#SBATCH --gpus=4                  # tensor parallel size = 4 per node
-#SBATCH --ntasks-per-node=1
+#SBATCH --gpus=4                  # tensor parallel size = 2 per node
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=512gb
-#SBATCH --array=0-2               # <-- 3 replicas (use 0-1 for two replicas)
 #SBATCH --output=serve_%A_%a.out
 #SBATCH --error=serve_%A_%a.err
+# #SBATCH --array=0-2               # <-- 3 replicas (use 0-1 for two replicas)
 
-set -euo pipefail
+
+set -eo pipefail
+USER=adibvafa
+ENV_NAME=bio
 
 # ==============================================================================
 # Environment Setup (matches your cluster)
 # ==============================================================================
-export PATH=/home/parsaidp/miniconda/envs/esmenv/bin:$PATH
-source /home/parsaidp/miniconda/etc/profile.d/conda.sh
-conda activate esmenv
-ROOT_DIR=/home/parsaidp
+export PATH=/home/$USER/miniconda/envs/$ENV_NAME/bin:$PATH
+source /home/$USER/miniconda/etc/profile.d/conda.sh
+conda activate $ENV_NAME
+ROOT_DIR=/home/$USER
 cd "$ROOT_DIR/trl/trl"
 
 export PYTHONUNBUFFERED=1
@@ -27,8 +30,8 @@ export PYTHONDONTWRITEBYTECODE=1
 unset SLURM_TRES_PER_TASK
 
 # ---------- Shared storage ----------
-SCRATCH_BASE="/large_storage/goodarzilab/parsaidp"
-SCRATCH_JOB="/home/parsaidp/trl/vllm_eval"
+SCRATCH_BASE="/large_storage/goodarzilab/bioreason"
+SCRATCH_JOB="/home/$USER/trl/v6_vllm_eval_stage3_sampling"
 
 # Per-replica index/ports/paths
 IDX="${SLURM_ARRAY_TASK_ID}"
@@ -58,24 +61,26 @@ export NCCL_DEBUG=warn
 TEXT_MODEL_NAME="Qwen/Qwen3-4B-Thinking-2507"
 # NOTE: If you get a lookup error, try the underscore variant: esm3_sm_open_v1
 PROTEIN_MODEL_NAME="esm3-sm-open-v1"
-
-GO_OBO_PATH="${ROOT_DIR}/BioReason2/data/go-basic.obo"
+# MODEL_PATH="/home/adibvafa/BioReason2/checkpoints/esm3-qwen-4B-finetune-mixed-Qwen3-4B-Thinking-2507-split_go_aspects_4b_2507_lr1e-4_32gpus-stage2/last-v1-hf.ckpt"
+# MODEL_PATH="/home/adibvafa/BioReason2/checkpoints/esm3-qwen-4B-finetune-cafa5-Qwen3-4B-Thinking-2507-interpro_ppi_go_graph_cooldown-stage3-cooldown/last-hf.ckpt"
+MODEL_PATH="/home/adibvafa/BioReason2/checkpoints/esm3-qwen-4B-finetune-cafa5-Qwen3-4B-Thinking-2507-interpro_ppi_go_graph_cooldown_5epochs-stage3-cooldown/last-hf.ckpt"
+GO_OBO_PATH="$ROOT_DIR/BioReason2/data/go-basic.obo"
 GO_EMBEDDINGS_PATH="/large_storage/goodarzilab/bioreason/go_embeddings"
 
 # Dataset/eval config to match training
-DATASET_CACHE_DIR="/large_storage/goodarzilab/parsaidp/data/"
+DATASET_CACHE_DIR="/large_storage/goodarzilab/bioreason/data/"
 STRUCTURE_DIR="/large_storage/goodarzilab/bioreason/data/structures/"
 MAX_LENGTH_PROTEIN=2000
 
 # Paths
 SERVE_SCRIPT="$ROOT_DIR/trl/trl/scripts/vllm_serve.py"
-EVAL_SCRIPT="$ROOT_DIR/trl/trl/scripts/eval_cafa_vllm.py"   # <-- put your eval file here
+EVAL_SCRIPT="$ROOT_DIR/trl/trl/scripts/eval_cafa_vllm.py"
 
 # vLLM knobs
 DTYPE="auto"
 KV_CACHE_DTYPE="auto"
-MAX_MODEL_LEN=4096
-GPU_MEM_UTIL=0.88
+MAX_MODEL_LEN=8000  # 4096
+GPU_MEM_UTIL=0.65 #  0.88
 TRUST_REMOTE_CODE=true
 ENABLE_PREFIX_CACHE=false
 ENFORCE_EAGER=true
@@ -132,7 +137,7 @@ echo "[Replica $IDX] Starting server on port $PORT ..."
 set -x
 srun --ntasks=1 \
   python "$SERVE_SCRIPT" \
-    --model "/home/adibvafa/BioReason2/checkpoints/esm3-qwen-4B-finetune-mixed-Qwen3-4B-Thinking-2507-split_go_aspects_4b_2507_lr1e-4_32gpus-stage2/last-v1-hf.ckpt" \
+    --model $MODEL_PATH \
     --tokenizer "$TOKENIZER_ARG" \
     --host "0.0.0.0" --port "$PORT" --log_level "info" \
     --tensor_parallel_size "$TENSOR_PARALLEL_SIZE" --data_parallel_size 1 \
@@ -193,7 +198,7 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --host "127.0.0.1" \
     --port "$PORT" \
     --cafa5_dataset "wanglab/cafa5" \
-    --cafa5_dataset_name "cafa5_reasoning" \
+    --cafa5_dataset_name "experiment_data" \
     --dataset_cache_dir "$DATASET_CACHE_DIR" \
     --structure_dir "$STRUCTURE_DIR" \
     --include_go_defs False \
@@ -205,19 +210,21 @@ if [[ "$RUN_EVAL" == "true" ]]; then
     --val_split_ratio 0.1 \
     --seed 23 \
     --max_length_protein "$MAX_LENGTH_PROTEIN" \
-    --max_samples 128 \
+    --max_samples -1 \
     --request_batch_size 64 \
-    --concurrent_requests 2 \
-    --temperature 0.7 \
-    --top_p 0.9 \
-    --max_new_tokens 1024 \
-    --repetition_penalty 1.0 \
+    --concurrent_requests 4 \
+    --temperature 0.6 \
+    --top_p 0.95 \
+    --top_k 20 \
+    --max_new_tokens 6000 \
+    --repetition_penalty 1 \
     --save_results \
-    --first_batch_out "$REPL_DIR/batches_0.json" \
-    --results_out "$REPL_DIR/cafa_vllm_results.json" \
+    --batch_inputs_dir "$REPL_DIR/batch_inputs" \
+    --batch_outputs_dir "$REPL_DIR/batch_outputs" \
+    --joined_outputs_dir "$REPL_DIR/joined_outputs" \
     > "$EVAL_LOG" 2>&1
   set +x
-  echo "[Replica $IDX] Eval done. Results: $REPL_DIR/cafa_vllm_results.json"
+  echo "[Replica $IDX] Eval done. Check: $REPL_DIR/batch_outputs/ (results), $REPL_DIR/joined_outputs/ (joined), $REPL_DIR/error_logs/ (errors)"
 fi
 
 # ------------------------------------------------------------------------------
