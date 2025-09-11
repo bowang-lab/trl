@@ -1601,18 +1601,22 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         # # Check if we have protein data
         # protein_sequences_batch = processed.get("protein_sequences")
         # batch_idx_map = processed.get("batch_idx_map")
-        protein_sequences_batch = inputs.get("protein_sequences", [])
+
+        # Since inputs is a list of dicts, we need to extract from the first element
+        # (assuming single batch processing for now)
+        first_input = inputs[0] if inputs else {}
+        protein_sequences_batch = first_input.get("protein_sequences", [])
         print("protein_sequences_batch:", protein_sequences_batch)
-        batch_idx_map = inputs.get("batch_idx_map", [])
+        batch_idx_map = first_input.get("batch_idx_map", [])
         print("batch_idx_map:", batch_idx_map)
-        structure_paths = inputs.get("structure_coords", None)
-        structure_coords = [_load_structure_coords(path) for path in structure_paths] 
+        structure_paths = first_input.get("structure_coords", None)
+        structure_coords = [_load_structure_coords(path) for path in structure_paths]
         print("structure_coords:", structure_coords)
-        go_aspects_data = inputs.get("go_aspects", None)
+        go_aspects_data = first_input.get("go_aspects", None)
         print("go_aspects:", go_aspects_data)
-        input_ids = inputs.get("input_ids", None)
+        input_ids = first_input.get("input_ids", None)
         print("input_ids:", input_ids)
-        attention_mask = inputs.get("attention_mask", None)
+        attention_mask = first_input.get("attention_mask", None)
         print("attention_mask:", attention_mask)
         
 
