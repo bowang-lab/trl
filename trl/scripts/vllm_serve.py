@@ -40,6 +40,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForMasked
 from esm.sdk.api import ESMProtein, SamplingConfig
 from bioreason2.utils.esm_embed import _load_structure_coords
 
+from bioreason2.utils.esm_embed import _load_structure_coords
+
 
 # Import DNA processing components with proper error handling
 DNA_LLM_AVAILABLE = False
