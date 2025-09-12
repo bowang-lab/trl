@@ -299,6 +299,24 @@ logger = logging.getLogger(__name__)
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_USE_V1"] = "0"
 
+def _safe_load_coords(maybe_path_or_tensor):
+    if maybe_path_or_tensor is None:
+        return None
+    t = _load_structure_coords(maybe_path_or_tensor)  # could be np.array / list / tensor / None
+    if t is None:
+        return None
+    if isinstance(t, np.ndarray):
+        t = torch.from_numpy(t)
+    elif isinstance(t, list):
+        # only safe if rectangular; if ragged, keep as list or convert upstream
+        try:
+            t = torch.tensor(t)
+        except Exception:
+            return None
+    # Keep on CPU for ESM; cast later if used
+    return t
+
+
 
 class WeightSyncWorkerExtension:
     """
@@ -1613,7 +1631,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         print("protein_sequences_batch:", protein_sequences_batch)
         batch_idx_map = [inp.get("batch_idx_map", []) for inp in inputs]
         print("batch_idx_map:", batch_idx_map)
-        structure_coords = [_load_structure_coords(inp.get("structure_coords", None)) for inp in inputs]
+        structure_coords = [_safe_load_coords(inp.get("structure_coords", None)) for inp in inputs]
         # structure_coords = _load_structure_coords(structure_paths) 
         print("structure_coords:", structure_coords)
         go_aspects_data = [inp.get("go_aspects", None) for inp in inputs]
@@ -1622,7 +1640,12 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         print("input_ids:", input_ids)
         attention_mask = [inp.get("attention_mask", None) for inp in inputs]
         print("attention_mask:", attention_mask)
-        
+        if not isinstance(attention_mask, torch.Tensor):
+            attention_mask = torch.tensor(attention_mask)
+        attention_mask = attention_mask.to(device)
+    
+
+        print(len(protein_sequences_batch))
 
         if protein_sequences_batch is not None and len(protein_sequences_batch) > 0:
             print(f"🧬 ✅ Protein data provided - processing protein embeddings...")
