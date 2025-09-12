@@ -2632,6 +2632,22 @@ def main(script_args: ScriptArguments):
         raw_outputs = list(chain.from_iterable(raw_outputs))
         print(f"🧬 raw_outputs3:\n{raw_outputs}\n\n")
 
+        # Check for and handle error responses with nice tracebacks
+        error_outputs = [req_out for req_out in raw_outputs if isinstance(req_out, dict) and "error" in req_out]
+        if error_outputs:
+            for error_output in error_outputs:
+                print(f"❌ Worker error: {error_output['error']}")
+                if "traceback" in error_output:
+                    print(f"📋 Full traceback from worker:\n{error_output['traceback']}")
+            # Raise the first error to stop processing
+            first_error = error_outputs[0]
+            error_msg = first_error["error"]
+            if "traceback" in first_error:
+                # Create a nice error message that includes the traceback
+                raise RuntimeError(f"Worker process failed: {error_msg}\n\nWorker traceback:\n{first_error['traceback']}")
+            else:
+                raise RuntimeError(f"Worker process failed: {error_msg}")
+
         # Reconstruct identifiers in original order (same chunking as prompts)
         # Filter out placeholder ranks using same logic as raw_outputs
         flattened_protein_ids = []
