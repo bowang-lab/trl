@@ -630,9 +630,12 @@ def llm_worker(
                     result = method(*args, **kwargs)
 
             except Exception as e:
-                # Create standardized error response instead of crashing worker
+                # Create standardized error response with full traceback instead of crashing worker
+                import traceback
                 error_msg = str(e)
+                full_traceback = traceback.format_exc()
                 print(f"❌ Worker error (continuing): {error_msg}")
+                print(f"📋 Full traceback:\n{full_traceback}")
 
                 # Format error response to match expected output structure
                 if method_name == "generate":
@@ -640,12 +643,13 @@ def llm_worker(
                         "completion_ids": [],
                         "completions": [],
                         "error": error_msg,
+                        "traceback": full_traceback,
                         "generation_time": 0.0,
                         "tokens_per_second": 0.0,
                         "total_tokens": 0,
                     }
                 else:
-                    result = {"error": error_msg}
+                    result = {"error": error_msg, "traceback": full_traceback}
 
             if command["type"] == "call":
                 connection.send(result)
@@ -2398,6 +2402,22 @@ def main(script_args: ScriptArguments):
         raw_outputs = [conn.recv() for conn in connections]
         raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
         raw_outputs = list(chain.from_iterable(raw_outputs))
+
+        # Check for and handle error responses with nice tracebacks
+        error_outputs = [req_out for req_out in raw_outputs if isinstance(req_out, dict) and "error" in req_out]
+        if error_outputs:
+            for error_output in error_outputs:
+                print(f"❌ Worker error: {error_output['error']}")
+                if "traceback" in error_output:
+                    print(f"📋 Full traceback from worker:\n{error_output['traceback']}")
+            # Raise the first error to stop processing
+            first_error = error_outputs[0]
+            error_msg = first_error["error"]
+            if "traceback" in first_error:
+                # Create a nice error message that includes the traceback
+                raise RuntimeError(f"Worker process failed: {error_msg}\n\nWorker traceback:\n{first_error['traceback']}")
+            else:
+                raise RuntimeError(f"Worker process failed: {error_msg}")
 
         # Filter out error responses and only process valid RequestOutput objects
         valid_outputs = [req_out for req_out in raw_outputs if hasattr(req_out, "outputs")]
