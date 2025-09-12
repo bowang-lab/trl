@@ -1626,9 +1626,9 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         # (assuming single batch processing for now)
         print("inputs:", inputs)
         
-        protein_sequences_batch = [inp.get("protein_sequences", []) for inp in inputs]
+        protein_sequences_batch = [inp.get("protein_sequences", [])[0] for inp in inputs]
         print("protein_sequences_batch:", protein_sequences_batch)
-        batch_idx_map = [inp.get("batch_idx_map", []) for inp in inputs]
+        batch_idx_map = [inp.get("batch_idx_map", [])[0] for inp in inputs]
         print("batch_idx_map:", batch_idx_map)
         structure_coords = [_safe_load_coords(inp.get("structure_coords", None)) for inp in inputs]
         # structure_coords = _load_structure_coords(structure_paths) 
