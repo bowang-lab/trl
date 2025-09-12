@@ -1791,6 +1791,8 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                     with torch.no_grad():
                         print("*" * 20)
                         print(f"sparams: {sparams}")
+                        print(f"   [DEBUG] Passing {len(trimmed_embeddings_list)} trimmed embedding tensors to vLLM...")
+                        print(f"   [DEBUG] First trimmed tensor shape: {trimmed_embeddings_list[0].shape}")
 
                         # 4. Pass the list of *trimmed* embedding tensors to vLLM
                         all_outputs = llm.generate(
@@ -1807,10 +1809,10 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                     #         f.write(f"text_embeddings[{i}]: {text_embeddings[i]}\n")
                     #         f.write("\n")
 
-                    all_outputs = llm.generate(
-                        [{"prompt_embeds": text_embeddings[i]} for i in range(batch_size)],
-                        sparams
-                    )
+                    # all_outputs = llm.generate(
+                    #     [{"prompt_embeds": text_embeddings[i]} for i in range(batch_size)],
+                    #     sparams
+                    # )
             elif text_embeddings.dim() == 2:
                 # Single item format
                 print(f"🧬 2D tensor detected - single item format")
