@@ -491,7 +491,7 @@ def llm_worker(
         gpu_memory_utilization=script_args.gpu_memory_utilization,
         enforce_eager=script_args.enforce_eager,
         dtype=script_args.dtype,
-        enable_prefix_caching=script_args.enable_prefix_caching,
+        enable_prefix_caching=False,
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
@@ -577,15 +577,15 @@ def llm_worker(
             break
         
 
-        print("🛎️ Worker received command")
-        print(command)
+        # print("🛎️ Worker received command")
+        # print(command)
         
         # print(f"command type: {type(command)}")
         # print("command type", command["type"])
         # Handle commands
         if command["type"] in {'call', 'fire_and_forget'}:
 
-            print(f"📬 Received command: {command['type']} - {command['method']}")
+            # print(f"📬 Received command: {command['type']} - {command['method']}")
         
             method_name = command["method"]
             args, kwargs = command.get("args", ()), command.get("kwargs", {})
@@ -593,7 +593,7 @@ def llm_worker(
             try:
                 # NEW: direct prompt_embeds path -----------------------------------------------------
                 if method_name == "generate" and "prompt_embeds" in kwargs:
-                    print("🪄 Handling direct prompt_embeds generation request")
+                    # print("🪄 Handling direct prompt_embeds generation request")
                     # kwargs["prompt_embeds"] is either a single 2-D list or a list of 2-D lists (batched)
                     embeds_payload = kwargs.pop("prompt_embeds")
                     sampling_params = (
@@ -623,9 +623,9 @@ def llm_worker(
                     result = generate_with_protein_embeddings(llm, protein_processor, kwargs, device)
                 else:
                     # Standard vLLM handling (including pre-processed embeddings)
-                    print("method_name", method_name)
-                    print("protein_processor:", protein_processor)
-                    print(f"🔍 Handling method: {method_name} (args: {len(args)}, kwargs: {len(kwargs)})")
+                    # print("method_name", method_name)
+                    # print("protein_processor:", protein_processor)
+                    # print(f"🔍 Handling method: {method_name} (args: {len(args)}, kwargs: {len(kwargs)})")
                     method = getattr(llm, method_name)
                     result = method(*args, **kwargs)
 
@@ -661,6 +661,16 @@ def chunk_list(lst: list, n: int) -> list:
     """Split list `lst` into `n` evenly distributed sublists."""
     k, r = divmod(len(lst), n)
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
+
+def sanitize_logprob(logprob):
+    import math
+
+    value = logprob.logprob
+    if math.isnan(value):
+        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
+        return None
+
+    return value
 
 
 class DNAEmbeddingProcessor:
@@ -1559,7 +1569,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         # Protein+text inputs format
         inputs = kwargs["inputs"]
         print(f"🧬 Processing {len(inputs)} input samples")
-        print(f"inputs: {inputs[0].keys()}")
+        # print(f"inputs: {inputs[0].keys()}")
 
         # # STEP 1: Extract text and protein sequences from inputs (EXACTLY like DNA)
         # batch_text = []
@@ -1628,25 +1638,28 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
 
         # Since inputs is a list of dicts, we need to extract from the first element
         # (assuming single batch processing for now)
-        print("inputs:", inputs)
+        # print("inputs:", inputs)
         
         protein_sequences_batch = [inp.get("protein_sequences", [])[0] for inp in inputs]
-        print("protein_sequences_batch:", protein_sequences_batch)
+        # print("protein_sequences_batch:", protein_sequences_batch)
         batch_idx_map = [inp.get("batch_idx_map", [])[0] for inp in inputs]
-        print("batch_idx_map:", batch_idx_map)
+        # print("batch_idx_map:", batch_idx_map)
         structure_coords = [_safe_load_coords(inp.get("structure_coords", None)) for inp in inputs]
         # structure_coords = _load_structure_coords(structure_paths) 
-        print("structure_coords:", structure_coords)
+        # print("structure_coords:", structure_coords)
         go_aspects_data = [inp.get("go_aspects", None) for inp in inputs]
-        print("go_aspects:", go_aspects_data)
+        # print("go_aspects:", go_aspects_data)
         input_ids = [inp.get("input_ids", None) for inp in inputs]
-        print("input_ids:", input_ids)
+        # print("input_ids:", input_ids)
         attention_mask = [inp.get("attention_mask", None) for inp in inputs]
-        print("attention_mask:", attention_mask)
+        # print("attention_mask:", attention_mask)
         if not isinstance(attention_mask, torch.Tensor):
             attention_mask = torch.tensor(attention_mask)
         attention_mask = attention_mask.to(device)
-    
+        #decode the input_ids to text
+        input_ids_text = [protein_processor.text_tokenizer.decode(inp, skip_special_tokens=False) for inp in input_ids]
+        print("input_ids_text:", input_ids_text)
+        
 
         print(len(protein_sequences_batch))
 
@@ -1729,9 +1742,22 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
 
             from copy import deepcopy
 
-            base_sampling_params = kwargs.get("sampling_params", SamplingParams())
+            # Prefer sampling params provided by the parent (FastAPI) process
+            base_sampling_params = kwargs.get(
+                "sampling_params",
+                SamplingParams(
+                    temperature=kwargs.get("temperature", 0.7),
+                    top_p=kwargs.get("top_p", 0.9),
+                    max_tokens=kwargs.get("max_new_tokens", 150),
+                    stop=kwargs.get("stop", ["<|im_end|>"]),
+                    n = kwargs.get("n", 1),
+                ),
+            )
+            print("base_sampling_params:", base_sampling_params)
 
             all_outputs = []
+            #flatten the text_embeddings to 2D
+            # text_embeddings = text_embeddings.view(-1, text_embeddings.shape[-1])
 
             print(f"🧬 ======= PROMPT EMBEDS ANALYSIS =======")
             print(f"🧬 Input text_embeddings shape: {text_embeddings.shape}")
@@ -1747,10 +1773,6 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                     single_embeddings = text_embeddings[batch_idx]  # (seq_len, hidden_size)
 
                     print(f"🧬 Generating for batch {batch_idx} with embeddings shape: {single_embeddings.shape}")
-                    sampling_params = kwargs.get(
-                        "sampling_params", SamplingParams(temperature=0.7, top_p=1.0, max_tokens=5120)
-                    )
-
                     sparams = deepcopy(base_sampling_params)
 
                     with torch.no_grad():
@@ -1760,43 +1782,25 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                 print(f"🧬 3D tensor detected - processing batch inference")
                 # make it a list of length batch_size
                 sparams = deepcopy(base_sampling_params)
+                print(f"🧬 untrimmed text_embeddings shape: {text_embeddings.shape}")
+
                 text_embeddings = [text_embeddings[i] for i in range(batch_size)]
+                #trim the parts that attention_mask is 0
+                text_embeddings = [emb[attention_mask[i].bool()] for i, emb in enumerate(text_embeddings)]
+                print(f"🧬 Trimmed text_embeddings: {text_embeddings}")
+                #shape
+                print(f"🧬 Trimmed text_embeddings shape: {text_embeddings[0].shape}")
                 with torch.no_grad():
                     sparams = deepcopy(base_sampling_params)
-                    padded_embeddings_list = [text_embeddings[i] for i in range(batch_size)]
-                    print(f"   [DEBUG] Converted 3D tensor to a list of {len(padded_embeddings_list)} padded tensors.")
-
-                    print("🧬 Trimming each tensor in the list...")
-
-                    # 2. Create a NEW list to hold the correctly-sized, trimmed tensors.
-                    trimmed_embeddings_list = []
-
-                    # 3. Loop through each PADDED tensor in the list.
-                    for i in range(batch_size):
-                        # 4. Get the true, un-padded length from the attention_mask for this item.
-                        actual_length = attention_mask[i].sum().item()
-
-                        # 5. Get the padded tensor from the list.
-                        padded_tensor = padded_embeddings_list[i]
-
-                        # 6. Slice THIS 2D TENSOR to its actual length.
-                        trimmed_tensor = padded_tensor[:actual_length]
-
-                        # 7. Add the trimmed tensor to our new list.
-                        trimmed_embeddings_list.append(trimmed_tensor)
-
-                        print(
-                            f"   [Batch {i}] Padded shape: {padded_tensor.shape}, Trimmed shape: {trimmed_tensor.shape}"
-                        )
                     with torch.no_grad():
                         print("*" * 20)
                         print(f"sparams: {sparams}")
-                        print(f"   [DEBUG] Passing {len(trimmed_embeddings_list)} trimmed embedding tensors to vLLM...")
-                        print(f"   [DEBUG] First trimmed tensor shape: {trimmed_embeddings_list[0].shape}")
+                        print(f"   [DEBUG] Passing {len(text_embeddings)} trimmed embedding tensors to vLLM...")
+                        print(f"   [DEBUG] First trimmed tensor shape: {text_embeddings[0].shape}")
 
                         # 4. Pass the list of *trimmed* embedding tensors to vLLM
                         all_outputs = llm.generate(
-                            [{"prompt_embeds": emb} for emb in trimmed_embeddings_list], sparams
+                            [{"prompt_embeds": emb} for emb in text_embeddings], sparams
                         )
                     print("*" * 20)
                     print(f"sparams: {sparams}")
@@ -1817,7 +1821,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                 # Single item format
                 print(f"🧬 2D tensor detected - single item format")
                 with torch.no_grad():
-                    all_outputs = llm.generate({"prompt_embeds": text_embeddings}, sampling_params)
+                    all_outputs = llm.generate({"prompt_embeds": text_embeddings}, base_sampling_params)
             else:
                 raise ValueError(f"Unexpected embedding dimensions: {text_embeddings.dim()}D")
             torch.cuda.empty_cache()
@@ -1974,7 +1978,7 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
                 # Single item format
                 print(f"🧬 2D tensor detected - single item format")
                 with torch.no_grad():
-                    all_outputs = llm.generate({"prompt_embeds": text_embeddings}, sampling_params)
+                    all_outputs = llm.generate({"prompt_embeds": text_embeddings}, base_sampling_params)
             else:
                 raise ValueError(f"Unexpected embedding dimensions: {text_embeddings.dim()}D")
             torch.cuda.empty_cache()
@@ -2218,6 +2222,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: List[List[int]]
+        logprobs: List[List[float]]
         completions: List[str]
         # Speed metrics
         generation_time: float  # Total generation time in seconds
@@ -2244,12 +2249,12 @@ def main(script_args: ScriptArguments):
         if request.protein_sequences:
             total_seqs = sum(len(seqs) for seqs in request.protein_sequences)
             print(f"🧬   - Total protein sequences: {total_seqs}")
-        print(f"🧬   - Batch idx map: {'Yes' if request.batch_idx_map else 'No'}")
-        print(f"🧬   - Structure coords: {'Yes' if request.structure_coords else 'No'}")
-        print(f"🧬   - GO aspects: {'Yes' if request.go_aspects else 'No'}")
-        print(f"🧬   - Temperature: {request.temperature}")
-        print(f"🧬   - Max tokens: {request.max_tokens}")
-        print(f"🧬   - Top-p: {request.input_ids}")
+        # print(f"🧬   - Batch idx map: {'Yes' if request.batch_idx_map else 'No'}")
+        # print(f"🧬   - Structure coords: {'Yes' if request.structure_coords else 'No'}")
+        # print(f"🧬   - GO aspects: {'Yes' if request.go_aspects else 'No'}")
+        # print(f"🧬   - Temperature: {request.temperature}")
+        # print(f"🧬   - Max tokens: {request.max_tokens}")
+        # print(f"🧬   - Top-p: {request.input_ids}")
 
         # Check if we're using DNA processing
         if request.dna_sequences and script_args.use_dna_llm and script_args.dna_model_name:
@@ -2452,6 +2457,9 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "repetition_penalty": request.repetition_penalty,
+            "n": request.n,
+            "logprobs": 0,
+
         }
         if request.guided_decoding_regex:
             generation_kwargs["guided_decoding"] = GuidedDecodingParams(
@@ -2606,9 +2614,9 @@ def main(script_args: ScriptArguments):
                     }
                 )
 
-            print(f"🧬 inputs: {inputs}")
+            # print(f"🧬 inputs: {inputs}")
 
-            print("sending it to conn", conn)
+            # print("sending it to conn", conn)
             try: 
                 conn.send(
                     {
@@ -2628,11 +2636,11 @@ def main(script_args: ScriptArguments):
         # Gather & flatten results
         # ------------------------------------------------------------------
         raw_outputs = [conn.recv() for conn in connections]
-        print(f"🧬 raw_outputs1:\n{raw_outputs}\n\n")
+        # print(f"🧬 raw_outputs1:\n{raw_outputs}\n\n")
         raw_outputs = [o for o, p in zip(raw_outputs, chunked_prompts) if p]  # drop placeholder ranks
-        print(f"🧬 raw_outputs2:\n{raw_outputs}\n\n")
+        # print(f"🧬 raw_outputs2:\n{raw_outputs}\n\n")
         raw_outputs = list(chain.from_iterable(raw_outputs))
-        print(f"🧬 raw_outputs3:\n{raw_outputs}\n\n")
+        # print(f"🧬 raw_outputs3:\n{raw_outputs}\n\n")
 
         # Check for and handle error responses with nice tracebacks
         error_outputs = [req_out for req_out in raw_outputs if isinstance(req_out, dict) and "error" in req_out]
@@ -2695,11 +2703,17 @@ def main(script_args: ScriptArguments):
                 f"   Completion {i + 1} (protein_id={pid}, go_aspect={ga}, length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}"
             )
 
+        logprobs: list[list[float]] = [
+            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
+            for outputs in valid_outputs
+            for output in outputs.outputs
+        ]
         return {
             "completion_ids": completion_ids,
             "completions": completions,
             "protein_ids": protein_ids_out,
             "go_aspects": go_aspects_out,
+            "logprobs": logprobs,
         }
 
     async def generate_with_vllm(request: GenerateRequest):
@@ -2719,6 +2733,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
+            "logprobs": 0,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -2743,7 +2758,12 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         completions = [output.text for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids, "completions": completions}
+        logprobs: list[list[float]] = [
+            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
+        return {"completion_ids": completion_ids, "completions": completions, "logprobs": logprobs}
 
     # Additional endpoints (init_communicator, update_named_param, etc.)
     class InitCommunicatorRequest(BaseModel):

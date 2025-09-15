@@ -44,10 +44,11 @@ logger = logging.getLogger(__name__)
 class VLLMGenerationResponse:
     """Response object for vLLM generation requests with speed metrics."""
     
-    def __init__(self, completion_ids: List[List[int]], completions: List[str], 
+    def __init__(self, completion_ids: List[List[int]], completions: List[str], logprobs: List[List[float]],
                  generation_time: float, tokens_per_second: float, total_tokens: int):
         self.completion_ids = completion_ids
         self.completions = completions
+        self.logprobs = logprobs 
         self.generation_time = generation_time
         self.tokens_per_second = tokens_per_second
         self.total_tokens = total_tokens
@@ -338,9 +339,11 @@ class VLLMClient:
             return VLLMGenerationResponse(
                 completion_ids=data["completion_ids"],
                 completions=data["completions"],
+                logprobs=data["logprobs"],
                 generation_time=data["generation_time"],
                 tokens_per_second=data["tokens_per_second"],
                 total_tokens=data["total_tokens"],
+
             )
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
@@ -403,6 +406,7 @@ class VLLMClient:
             return VLLMGenerationResponse(
                 completion_ids=data["completion_ids"],
                 completions=data["completions"],
+                logprobs=data["logprobs"],
                 generation_time=data["generation_time"],
                 tokens_per_second=data["tokens_per_second"],
                 total_tokens=data["total_tokens"],
@@ -662,10 +666,11 @@ logger = logging.getLogger(__name__)
 class VLLMGenerationResponse:
     """Response object for vLLM generation requests with speed metrics."""
     
-    def __init__(self, completion_ids: List[List[int]], completions: List[str], 
+    def __init__(self, completion_ids: List[List[int]], completions: List[str], logprobs: List[List[float]],
                  generation_time: float, tokens_per_second: float, total_tokens: int):
         self.completion_ids = completion_ids
         self.completions = completions
+        self.logprobs = logprobs
         self.generation_time = generation_time
         self.tokens_per_second = tokens_per_second
         self.total_tokens = total_tokens
@@ -954,6 +959,7 @@ class VLLMClient:
             return VLLMGenerationResponse(
                 completion_ids=data["completion_ids"],
                 completions=data["completions"],
+                logprobs=data["logprobs"],
                 generation_time=data["generation_time"],
                 tokens_per_second=data["tokens_per_second"],
                 total_tokens=data["total_tokens"],
@@ -1019,6 +1025,7 @@ class VLLMClient:
             return VLLMGenerationResponse(
                 completion_ids=data["completion_ids"],
                 completions=data["completions"],
+                logprobs=data["logprobs"],
                 generation_time=data["generation_time"],
                 tokens_per_second=data["tokens_per_second"],
                 total_tokens=data["total_tokens"],
